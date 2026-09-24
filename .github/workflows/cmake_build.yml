@@ -1,0 +1,173 @@
+name: CMake Build & Contract Tests
+
+# ---------------------------------------------------------------------------
+# CI environment / version checks log (kept for maintenance reference)
+#
+# [1] Node.js runtime
+#     GitHub deprecated Node.js 20 on Actions runners. Use actions/checkout@v5
+#     (current major, supported Node runtime) to avoid the deprecation warning.
+#     Checked on: 2026-09-24.
+#
+# [2] Qt version
+#     ubuntu-24.04 ships Qt 6.4.2, but the project requires Qt6 >= 6.5
+#     (source uses QT_VERSION_CHECK(6,5,0)/(6,6,0)). Install Qt 6.7.2 explicitly
+#     via jurplel/install-qt-action@v4 (same as the upstream qmake CI).
+#
+# [3] mupdf for the system route
+#     ubuntu-24.04 ships mupdf 1.23.10, below the contract's verified minimum
+#     (1.26.11). The system-mupdf route is therefore not exercised by a real
+#     build in CI; its decision matrix is covered by the contract tests instead.
+#     The vendored route (default) is fully built.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches:
+      - "*"
+  pull_request:
+    branches:
+      - "*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Fast: contract regression tests (self-contained, no submodules, no full build).
+  # Verifies the dependency-source decision matrices, install contract, presets,
+  # and CTest registration.
+  # ---------------------------------------------------------------------------
+  contract-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.2'
+          modules: 'all'
+          cache: true
+
+      - name: Verify contract test tree is present
+        run: |
+          missing=0
+          for f in \
+            cmake/tests/run_all.sh \
+            cmake/tests/test_mupdf_contract.sh \
+            cmake/tests/test_sqlite_contract.sh \
+            cmake/tests/test_install_contract.sh \
+            cmake/tests/test_presets.sh \
+            cmake/SioyekMupdf.cmake \
+            cmake/SioyekSQLite.cmake \
+            cmake/SioyekDependencies.cmake
+          do
+            if [[ ! -f "$f" ]]; then
+              echo "::error file=$f::required file is missing on this branch"
+              missing=1
+            fi
+          done
+          if [[ $missing -ne 0 ]]; then
+            echo "::error::This workflow requires a branch that contains the full cmake/ tree."
+            exit 1
+          fi
+
+      - name: Run contract test scripts directly
+        env:
+          # Print per-case diagnostics whenever a contract case fails.
+          SIOYEK_TEST_VERBOSE: "1"
+        run: bash ./cmake/tests/run_all.sh
+
+      - name: Configure (CTest registration)
+        run: cmake -S . -B build/ci -DSIOYEK_USE_SYSTEM_MUPDF=OFF -DSIOYEK_ENABLE_TESTS=ON
+
+      - name: Run contract tests via CTest
+        run: ctest --test-dir build/ci --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Real build: vendored mupdf, across a compiler matrix, plus a staged-install
+  # smoke test. This is the route that catches link-time and command errors.
+  # ---------------------------------------------------------------------------
+  cmake-build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - { cc: gcc,   cxx: g++   }
+          - { cc: clang, cxx: clang++ }
+    env:
+      CC: ${{ matrix.compiler.cc }}
+      CXX: ${{ matrix.compiler.cxx }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev libjbig2dec0-dev \
+            libjpeg-dev libopenjp2-7-dev libfreetype-dev libgumbo-dev \
+            libgl1-mesa-dev
+          if [ "${{ matrix.compiler.cc }}" = "clang" ]; then
+            sudo apt-get install -y clang
+          fi
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.2'
+          modules: 'all'
+          cache: true
+
+      - name: Configure
+        run: cmake --preset linux-ci
+
+      - name: Build
+        run: cmake --build --preset linux-ci -j"$(nproc)"
+
+      - name: Staged install (verify install contract)
+        run: |
+          BUILD_DIR="$(bash cmake/tests/resolve_preset_bindir.sh linux-ci)"
+          echo "build dir: ${BUILD_DIR}"
+          DESTDIR="$PWD/stage" cmake --install "${BUILD_DIR}"
+
+      - name: Verify installed layout
+        run: |
+          set -e
+          test -x stage/usr/bin/sioyek
+          test -f stage/usr/share/sioyek/tutorial.pdf
+          test -d stage/usr/share/sioyek/shaders
+          test -f stage/usr/etc/sioyek/keys.config
+          test -f stage/usr/share/applications/sioyek.desktop
+          test -f stage/usr/share/pixmaps/sioyek-icon-linux.png
+          test -f stage/usr/share/man/man1/sioyek.1
+
+      - name: Smoke test (binary links resolve; no undefined symbols)
+        run: |
+          set -e
+          BIN="$PWD/stage/usr/bin/sioyek"
+          # ldd must not report "not found" for any dynamic dependency.
+          if ldd "$BIN" | grep -q "not found"; then
+            echo "::error::unresolved dynamic dependencies:"; ldd "$BIN" | grep "not found"; exit 1
+          fi
+          # The binary must load its shared libraries (will fail fast on missing libs).
+          ldd "$BIN" >/dev/null
+          # Running --version / --help should not crash (may exit non-zero w/o display).
+          "$BIN" --help >/dev/null 2>&1 || true
+          echo "smoke test passed"
+
+      - name: Run contract tests via CTest
+        run: |
+          BUILD_DIR="$(bash cmake/tests/resolve_preset_bindir.sh linux-ci)"
+          ctest --test-dir "${BUILD_DIR}" --output-on-failure

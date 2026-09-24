@@ -1,4 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
+# Note on versioning (kept intentionally in sync with the presets):
+#   * 3.16 is the hard minimum for building directly with `cmake -S . -B <dir>`.
+#   * CMakePresets.json declares `cmakeMinimumRequired` 3.25 because preset
+#     schema version 6 was adopted for the `${presetName}`/inheritance features
+#     used by the presets. Using the presets therefore requires CMake >= 3.25,
+#     while a direct (preset-less) configure still works with 3.16.
+#   * This mirrors neovim: a low CMakeLists minimum + presets as a convenience
+#     layer. See cmake/README.md ("Requirements").
+cmake_policy(VERSION 3.16)
 project(sioyek VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -6,22 +15,37 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# Build-type / optimization / strip policy (ccache, LTO, unity build, strip).
+include(SioyekBuildTypes)
+
+# CTest contract regression tests: registered early, independent of any dependency
+# probe result, so that even with missing vendored sources (configuration fails later)
+# the contract tests can still run via -DSIOYEK_ENABLE_TESTS=ON.
+include(SioyekTesting)
+
+# Unified, robust dependency resolution (config -> module -> pkg-config)
+include(SioyekDependencies)
+
+# mupdf dependency consumption contract (provides the unified target `mupdf` and options)
+include(SioyekMupdf)
+include(SioyekSQLite)
+include(SioyekWarnings)
+
 # Qt Stuff
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core)
-if(QT_VERSION_MAJOR GREATER_EQUAL 6)
-  find_package(Qt6 REQUIRED COMPONENTS
-        Core Gui Widgets Network OpenGL QuickWidgets
-        Svg TextToSpeech OpenGLWidgets
-  )
-else()
-  find_package(Qt5 REQUIRED COMPONENTS
-        Core Gui Widgets Network OpenGL QuickWidgets
-        Svg TextToSpeech OpenGLExtensions
-  )
+# Qt6 only; 6.5 is the hard minimum (code uses QT_VERSION_CHECK(6,5,0)),
+# the upstream development branch recommends 6.7/6.8.
+find_package(Qt6 6.5 REQUIRED COMPONENTS
+      Core Gui Widgets Network OpenGL QuickWidgets
+      Svg TextToSpeech OpenGLWidgets
+)
+if(Qt6_VERSION VERSION_LESS 6.7)
+  message(STATUS "sioyek: detected Qt ${Qt6_VERSION}. The upstream development branch recommends Qt 6.7 or 6.8.")
 endif()
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
@@ -105,12 +129,17 @@ if(APPLE)
   )
 endif()
 
-target_compile_options(sioyek PRIVATE -Wno-inconsistent-missing-override)
+# Warning policy: compiler-specific flag detection + third-party isolation (see cmake/SioyekWarnings.cmake)
+sioyek_apply_self_warnings(sioyek)
 
-target_include_directories(sioyek PRIVATE 
-    pdf_viewer 
-    mupdf/include
-    ${SQLite3_INCLUDE_DIRS}
+# Optional unity build (fewer TUs -> faster builds; off by default).
+if(SIOYEK_UNITY_BUILD)
+  set_target_properties(sioyek PROPERTIES UNITY_BUILD ON)
+  message(STATUS "sioyek: unity build enabled")
+endif()
+
+target_include_directories(sioyek PRIVATE
+    pdf_viewer
 )
 
 target_compile_definitions(sioyek PRIVATE
@@ -159,61 +188,90 @@ if(UNIX AND NOT APPLE)
   )
 endif()
 
-find_package(ZLIB REQUIRED)
-find_package(HarfBuzz REQUIRED)
-find_package(SQLite3 REQUIRED)
-
-if((QT_VERSION_MAJOR GREATER 5))
-  target_compile_definitions(sioyek PRIVATE
-        SIOYEK_QT6
-  )
-
-  target_link_libraries(sioyek PRIVATE
-        Qt::OpenGLWidgets
-  )
+# ZLIB is used to link the vendored mupdf static libs (the system branch gets it via pkg-config).
+# Resolve it robustly (config/module/pkg-config) via the unified helper.
+sioyek_find_dependency(
+    NAME        ZLIB
+    PKG_NAMES   zlib
+    OUT_TARGET  SIOYEK_ZLIB_TARGET
+    OUT_VERSION SIOYEK_ZLIB_VERSION
+    REQUIRED)
+# Normalize to ZLIB::ZLIB for downstream use (the helper may return a different name).
+if(SIOYEK_ZLIB_TARGET AND NOT TARGET ZLIB::ZLIB)
+    add_library(ZLIB::ZLIB INTERFACE IMPORTED GLOBAL)
+    set_target_properties(ZLIB::ZLIB PROPERTIES INTERFACE_LINK_LIBRARIES "${SIOYEK_ZLIB_TARGET}")
 endif()
+
+# Qt6 only: always define SIOYEK_QT6 and link OpenGLWidgets
+target_compile_definitions(sioyek PRIVATE
+      SIOYEK_QT6
+)
+target_link_libraries(sioyek PRIVATE
+      Qt::OpenGLWidgets
+)
 
 add_library(fzf STATIC
     fzf/fzf.c
     fzf/fzf.h
 )
 
+# Downgrade third-party sources (sqlite3.c/shell.c/synctex/fzf)
+sioyek_downgrade_third_party_sources(sioyek)
+
+# Downgrade Qt generated units (mocs_compilation.cpp / qrc_*.cpp)
+sioyek_downgrade_autogen(sioyek)
+
 target_link_libraries(sioyek PRIVATE
     ${CMAKE_DL_LIBS}
-    mupdf
-    ${HARFBUZZ_LIBRARIES}
-    ZLIB::ZLIB
+    mupdf            # mupdf consumption contract target (system or vendored)
     fzf
-    SQLite::SQLite3
+    sqlite_link      # SQLite consumption contract target (system or vendored)
 )
 
 if(APPLE)
-  # target_link_libraries(sioyek PRIVATE
-  #       "-framework AppKit"
-  #       mupdf-third
-  #       mupdf-threads
-  # )
+  # mupdf linking is handled by the consumption contract target `mupdf` (no hardcoded -L/-l paths)
   target_link_libraries(sioyek PRIVATE
       "-framework AppKit"
-      -ldl
-      -L${CMAKE_CURRENT_SOURCE_DIR}/mupdf/build/release
-      -lmupdf
-      -lmupdf-third
-      -lmupdf-threads
-      -lz
   )
 else()
-  string(REPLACE "-mno-direct-extern-access" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  # Note: historically this used string(REPLACE ... CMAKE_CXX_FLAGS ...) to strip
+  # -mno-direct-extern-access, but that option is actually supplied by Qt6's
+  # INTERFACE_COMPILE_OPTIONS (a target property), not present in CMAKE_CXX_FLAGS,
+  # so the replacement was dead code and has been removed.
+  # Qt6 adds this option intentionally; it is harmless in the current environment.
 endif()
 
-install(TARGETS sioyek
-    BUNDLE DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+# Install contract (must be included after the sioyek target is defined)
+include(SioyekInstall)
 
-qt_generate_deploy_app_script(
-    TARGET sioyek
-    OUTPUT_SCRIPT deploy_script
-    NO_UNSUPPORTED_PLATFORM_ERROR
-)
-install(SCRIPT ${deploy_script})
+# Qt runtime deployment (packs Qt libs/plugins into the install tree).
+# Disable for distro packaging (downstream reuse) so the packager uses system Qt;
+# enable for self-contained distribution (AppImage / portable bundle).
+# Default: ON for Windows/macOS (self-contained), OFF elsewhere (delegated to downstream).
+if(WIN32 OR APPLE)
+  set(_sioyek_qt_deploy_default ON)
+else()
+  set(_sioyek_qt_deploy_default OFF)
+endif()
+option(SIOYEK_INSTALL_QT_DEPLOY
+    "Deploy Qt runtime libraries/plugins into the install tree (disable for distro packaging)."
+    ${_sioyek_qt_deploy_default})
+
+if(SIOYEK_INSTALL_QT_DEPLOY)
+  qt_generate_deploy_app_script(
+      TARGET sioyek
+      OUTPUT_SCRIPT deploy_script
+      NO_UNSUPPORTED_PLATFORM_ERROR
+  )
+  install(SCRIPT ${deploy_script})
+  message(STATUS "sioyek: Qt runtime deployment enabled (SIOYEK_INSTALL_QT_DEPLOY=ON)")
+else()
+  message(STATUS "sioyek: Qt runtime deployment disabled (downstream packager uses system Qt)")
+endif()
+
+# CPack packaging (reuses the install contract; must be at the end of the file to
+# collect all variables defined above)
+include(SioyekPackaging)
+
+# Clean-up targets (clean-all / clean-packages / clean-stage / clean-in-source).
+include(SioyekClean)

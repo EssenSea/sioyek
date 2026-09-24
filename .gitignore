@@ -354,6 +354,8 @@ moc*
 
 # Linux and Mac build files
 Makefile
+# ...but keep the hand-written top-level Makefile (a thin CMake-preset wrapper)
+!/Makefile
 libs/*
 lib_debug/*
 lib_release/*
@@ -378,6 +380,11 @@ sioyek_autogen/*
 sioyek.app/*
 qrc_resources.cpp
 *.cmake
+# Exception: hand-written CMake modules (cmake/ dir, at any depth) must be tracked.
+# NOTE: the previous `!cmake/*.cmake` only re-included files directly under cmake/,
+# silently ignoring any .cmake added in a subdirectory (e.g. cmake/tests/). Use a
+# recursive negation so the whole cmake/ tree stays tracked.
+!cmake/**/*.cmake
 bak/*
 CMakeFiles/*
 CMakeCache.txt
@@ -386,6 +393,40 @@ CMakeCache.txt
 .qt/*
 .DS_STORE
 tutorial/*.blg
+
+# ---------------------------------------------------------------------------
+# CMake build system: in-source leftovers produced by a mis-configured or
+# mis-invoked build, and outputs of the clean-* targets (SioyekClean.cmake).
+# These must never be committed.
+# ---------------------------------------------------------------------------
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+CPackConfig.cmake
+CPackSourceConfig.cmake
+# Staging / packaging / dependency build residue
+/stage/
+/sioyek-release/
+/.qt/
+/.deps/
+# Legacy in-source qmake build outputs
+/Makefile.bak
+lib_debug/
+lib_release/
+/sioyek
+sioyek_log.txt
+sioyek.app/
+# Dependency (submodule) in-tree build residue
+mupdf/build/
+mupdf/generated/
+zlib/build/
+# vim swap files
+*.swp
+*.swo
+
+# clang static analyzer / clang-tidy outputs (e.g. from `make lint`)
+*.plist
+compile_commands.json.bak
 
 xcodebuild/*
 
@@ -397,3 +438,9 @@ flake*
 # ctags
 tags
 .vscode
+
+# CMake presets (user-local overrides should not be committed)
+CMakeUserPresets.json
+
+# Top-level Makefile local overrides (untracked, like neovim's local.mk)
+/local.mk

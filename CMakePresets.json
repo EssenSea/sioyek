@@ -1,0 +1,185 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SIOYEK_ENABLE_CCACHE": "AUTO"
+      }
+    },
+    {
+      "name": "ninja",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja"
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "inherits": "ninja",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "/usr",
+        "SIOYEK_INSTALL_LAYOUT": "standard",
+        "SIOYEK_INSTALL_QT_DEPLOY": "OFF",
+        "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",
+        "SIOYEK_USE_SYSTEM_SQLITE": "AUTO"
+      }
+    },
+
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release (standard; optimized; stripped)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SIOYEK_STRIP_ON_INSTALL": "ON",
+        "SIOYEK_PACKAGE_STRIP": "ON"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug (standard; symbols kept, no strip)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SIOYEK_STRIP_ON_INSTALL": "OFF",
+        "SIOYEK_PACKAGE_STRIP": "OFF",
+        "SIOYEK_STRICT_NON_THIRD_PARTY_WARN": "ON",
+        "SIOYEK_WERROR_RETURN_TYPE": "ON"
+      }
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "displayName": "Linux RelWithDebInfo (optimized + debug info, not stripped)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "SIOYEK_STRIP_ON_INSTALL": "OFF",
+        "SIOYEK_PACKAGE_STRIP": "OFF"
+      }
+    },
+    {
+      "name": "linux-portable",
+      "displayName": "Linux Portable (resources beside binary; self-contained Qt; stripped)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SIOYEK_INSTALL_LAYOUT": "portable",
+        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
+        "SIOYEK_STRIP_ON_INSTALL": "ON",
+        "SIOYEK_PACKAGE_STRIP": "ON"
+      }
+    },
+    {
+      "name": "linux-appimage",
+      "displayName": "Linux AppImage (self-contained; stripped; LTO)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SIOYEK_INSTALL_LAYOUT": "standard",
+        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
+        "SIOYEK_ENABLE_LTO": "ON",
+        "SIOYEK_STRIP_ON_INSTALL": "ON",
+        "SIOYEK_PACKAGE_STRIP": "ON"
+      }
+    },
+    {
+      "name": "linux-vendored",
+      "displayName": "Linux Release (force vendored mupdf/sqlite; max reproducibility; stripped)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SIOYEK_USE_SYSTEM_MUPDF": "OFF",
+        "SIOYEK_USE_SYSTEM_SQLITE": "OFF",
+        "SIOYEK_STRIP_ON_INSTALL": "ON",
+        "SIOYEK_PACKAGE_STRIP": "ON"
+      }
+    },
+    {
+      "name": "linux-ci",
+      "displayName": "Linux CI (vendored; not stripped; fast)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SIOYEK_USE_SYSTEM_MUPDF": "OFF",
+        "SIOYEK_USE_SYSTEM_SQLITE": "OFF",
+        "SIOYEK_STRIP_ON_INSTALL": "OFF"
+      }
+    },
+
+    {
+      "name": "macos-release",
+      "displayName": "macOS Release (stripped via deploy)",
+      "inherits": "ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
+        "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",
+        "SIOYEK_USE_SYSTEM_SQLITE": "AUTO",
+        "SIOYEK_STRIP_ON_INSTALL": "ON"
+      }
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug (symbols kept)",
+      "inherits": "ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
+        "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",
+        "SIOYEK_USE_SYSTEM_SQLITE": "AUTO",
+        "SIOYEK_STRIP_ON_INSTALL": "OFF",
+        "SIOYEK_STRICT_NON_THIRD_PARTY_WARN": "ON",
+        "SIOYEK_WERROR_RETURN_TYPE": "ON"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release (MSVC)",
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "cacheVariables": {
+        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
+        "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",
+        "SIOYEK_USE_SYSTEM_SQLITE": "AUTO"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug (MSVC)",
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "cacheVariables": {
+        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
+        "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",
+        "SIOYEK_USE_SYSTEM_SQLITE": "AUTO",
+        "SIOYEK_STRICT_NON_THIRD_PARTY_WARN": "ON",
+        "SIOYEK_WERROR_RETURN_TYPE": "ON"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    { "name": "linux-release",       "configurePreset": "linux-release" },
+    { "name": "linux-debug",         "configurePreset": "linux-debug" },
+    { "name": "linux-relwithdebinfo","configurePreset": "linux-relwithdebinfo" },
+    { "name": "linux-portable",      "configurePreset": "linux-portable" },
+    { "name": "linux-appimage",      "configurePreset": "linux-appimage" },
+    { "name": "linux-vendored",      "configurePreset": "linux-vendored" },
+    { "name": "linux-ci",            "configurePreset": "linux-ci" },
+    { "name": "macos-release",       "configurePreset": "macos-release" },
+    { "name": "macos-debug",         "configurePreset": "macos-debug" },
+    { "name": "windows-release",     "configurePreset": "windows-release", "configuration": "Release" },
+    { "name": "windows-debug",       "configurePreset": "windows-debug",   "configuration": "Debug" }
+  ],
+
+  "packagePresets": [
+    { "name": "linux-release",  "configurePreset": "linux-release",  "generators": ["TGZ","DEB","RPM"] },
+    { "name": "linux-portable", "configurePreset": "linux-portable", "generators": ["TGZ"] },
+    { "name": "linux-appimage", "configurePreset": "linux-appimage", "generators": ["TGZ"] }
+  ]
+}

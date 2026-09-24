@@ -1,0 +1,15 @@
+# Copy this to 'local.mk' in the repository root (it is git-ignored).
+# Uncomment entries to take effect. This mirrors neovim's contrib/local.mk.example.
+
+# Default preset used by `make`:
+# PRESET = linux-vendored
+
+# Extra CMake configure flags:
+# CMAKE_EXTRA_FLAGS = -DSIOYEK_MUPDF_UNEMBED_FONTS=CJK -DSIOYEK_ENABLE_LTO=ON
+
+# Install prefix / staging:
+# PREFIX = /usr/local
+# DESTDIR = /tmp/stage
+
+# Parallelism:
+# JOBS = 8

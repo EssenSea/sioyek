@@ -14,14 +14,14 @@ on:
 jobs:
   upload-release:
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name != 'pull_request') }}
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     needs: [build-mac, build-mac-arm, build-linux, build-windows]
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: create release
       id: create_release
-      uses: actions/create-release@master
+      uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
       with:
@@ -78,7 +78,7 @@ jobs:
 
   build-linux:
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Cache apt-get packages

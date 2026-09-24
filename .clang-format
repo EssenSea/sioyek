@@ -1,0 +1,15 @@
+# clang-format style for sioyek.
+# Chosen to match the existing code style (Allman braces, 4-space indent).
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+ColumnLimit: 0
+PointerAlignment: Left
+SortIncludes: false
