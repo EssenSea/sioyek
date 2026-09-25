@@ -148,7 +148,7 @@ jobs:
           test -x stage/usr/bin/sioyek
           test -f stage/usr/share/sioyek/tutorial.pdf
           test -d stage/usr/share/sioyek/shaders
-          test -f stage/usr/etc/sioyek/keys.config
+          test -f stage/etc/sioyek/keys.config
           test -f stage/usr/share/applications/sioyek.desktop
           test -f stage/usr/share/pixmaps/sioyek-icon-linux.png
           test -f stage/usr/share/man/man1/sioyek.1
