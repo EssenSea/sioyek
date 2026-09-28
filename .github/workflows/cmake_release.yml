@@ -242,17 +242,62 @@ jobs:
       #
       # The output is uploaded as a release asset, not merely kept as a CI
       # artifact, so it travels with the binary it documents.
+      # Software Bill of Materials (SLSA: make the build inputs inspectable).
+      #
+      # WHY: the release artifacts statically embed several third-party
+      # components (mupdf and its bundled freetype/harfbuzz/brotli/libjpeg/
+      # lcms2/mujs/zlib, the SQLite amalgamation, fzf, utf8cpp, rapidfuzz). A
+      # consumer has no practical way to inventory those from the binary alone.
+      #
+      # IMPLEMENTATION NOTE: the SBOM is written to a CONCRETE PATH INSIDE THE
+      # WORKSPACE and then uploaded with actions/upload-artifact, rather than
+      # relying on anchore/sbom-action's own artifact handling. The action's
+      # "output-file" is resolved relative to its internal working directory and
+      # its artifact arrives with a nested directory structure, so the release
+      # job's file glob found no *.spdx.json at all and, with
+      # fail_on_unmatched_files: true, aborted the publish step -- the SBOM
+      # silently existed but never reached the release. Writing to a known path
+      # keeps the file where the glob expects it.
       - name: Generate SBOM (SPDX JSON)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          # Scan the staged install tree rather than the source, so the SBOM
-          # reflects what is actually shipped.
+          # Scan the build tree rather than the source, so the SBOM reflects
+          # what is actually shipped.
           path: build/linux-release
           format: spdx-json
-          output-file: sioyek-${{ github.ref_name }}.spdx.json
-          artifact-name: cmake-linux-sbom
-          upload-artifact: true
+          output-file: ${{ github.workspace }}/sioyek.spdx.json
+          # Disable the action's own artifact upload: this job uploads the file
+          # explicitly below, at a path the publish job can find.
+          upload-artifact: false
           upload-release-assets: false
+
+      - name: Locate and verify the SBOM
+        id: sbom
+        run: |
+          set -euo pipefail
+          # "output-file" semantics differ between sbom-action releases, so find
+          # the document instead of assuming one exact path.
+          SBOM=$(find . -maxdepth 3 -name "*.spdx.json" -type f | head -1)"
+          if [ -z "$SBOM" ]; then
+            echo "::warning::no .spdx.json was produced; the release proceeds without an SBOM"
+            find . -maxdepth 3 -name "*sbom*" | head -20
+            exit 0
+          fi
+          if ! grep -q "spdxVersion" "$SBOM"; then
+            echo "::warning::$SBOM does not look like SPDX JSON; skipping its upload"
+            exit 0
+          fi
+          echo "SBOM: $SBOM ($(wc -c < "$SBOM") bytes)"
+          echo "found=$SBOM" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SBOM
+        if: steps.sbom.outputs.found != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmake-linux-sbom
+          path: ${{ steps.sbom.outputs.found }}
+          if-no-files-found: error
+
 
       - name: Upload packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -389,8 +434,17 @@ jobs:
         with:
           path: dist
 
-      - name: List what will be published
-        run: find dist -type f | sort
+      - name: Verify the primary artifacts are present
+        run: |
+          set -euo pipefail
+          find dist -type f | sort
+          # The release must never publish nothing. SBOM absence is tolerated
+          # (warned about in the build job), but a missing package is not.
+          if ! find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.zip' \) | grep -q .; then
+            echo "::error::no packages were downloaded; refusing to publish an empty release"
+            exit 1
+          fi
+          echo "primary artifacts present"
 
       - name: Create or update the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -399,10 +453,15 @@ jobs:
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('CMake manual build {0}', github.run_number) }}
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # SBOM is an ADDITIONAL artifact, not a release blocker: if it is
+          # missing the packages must still be published, with the omission
+          # visible as a warning rather than as a failed release. Hence
+          # fail_on_unmatched_files is false here. The primary artifacts are
+          # checked explicitly in the step above.
+          fail_on_unmatched_files: false
           files: |
             dist/**/*.deb
             dist/**/*.rpm
             dist/**/*.tar.gz
             dist/**/*.zip
             dist/**/*.spdx.json
-          fail_on_unmatched_files: true
