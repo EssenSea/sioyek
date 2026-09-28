@@ -197,10 +197,25 @@ jobs:
           tar xzf build/linux-release/*.tar.gz -C /tmp/verify
           BIN=/tmp/verify/usr/bin/sioyek
           test -x "$BIN"
-          if ldd "$BIN" | grep -q "not found"; then
-            echo "::error::unresolved dynamic dependencies:"; ldd "$BIN" | grep "not found"; exit 1
+
+          # Capture the listing BEFORE searching it. Piping ldd straight into
+          # "grep -q" is wrong under "set -o pipefail": grep exits on the first
+          # match, ldd takes SIGPIPE, and the pipeline status becomes non-zero
+          # -- so the 'if' branch is taken EVEN WHEN the pattern did not
+          # match, and the step reports a dependency failure that does not
+          # exist. Observed as a bare "##[error]Process completed with exit
+          # code 1" with no unmatched library printed. This is the same SIGPIPE
+          # mistake already fixed in the package-contents step above; fixing it
+          # there did not fix it here, so the pattern is called out explicitly.
+          ldd "$BIN" > ldd-output.txt
+          if grep -q "not found" ldd-output.txt; then
+            echo "::error::unresolved dynamic dependencies:"
+            grep "not found" ldd-output.txt
+            exit 1
           fi
           echo "packaged binary resolves all dynamic dependencies"
+          echo "--- ldd summary ---"
+          wc -l < ldd-output.txt | xargs echo "resolved entries:"
 
       # Software Bill of Materials (SLSA: make the build inputs inspectable).
       #
