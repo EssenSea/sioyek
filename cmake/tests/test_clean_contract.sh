@@ -131,6 +131,47 @@ else
     bad "clean-deps target missing"
 fi
 
+# ---------------------------------------------------------------------------
+# Regression: glob-based packaging artifacts must actually be REMOVED.
+#
+# `cmake -E rm -rf <pattern-with-*>` does NOT expand globs; it treats '*' as a
+# literal and exits 0 while deleting nothing. An earlier clean-packages /
+# clean-all implementation had this silent no-op. Guard that real *.deb/*.rpm/
+# *.tar.gz/*.AppImage files are gone after clean-packages.
+# ---------------------------------------------------------------------------
+echo "--- clean-packages really removes glob artifacts ---"
+mkdir -p "${D}/build/appimage"
+touch "${D}/pkg.deb" "${D}/pkg.rpm" "${D}/pkg.tar.gz" "${D}/pkg.AppImage" \
+      "${D}/build/tree.tar.gz"
+echo x > "${D}/build/appimage/AppRun"
+cmake --build "${D}/build" --target clean-packages >/dev/null 2>&1
+glob_left=0
+for f in "${D}/pkg.deb" "${D}/pkg.rpm" "${D}/pkg.tar.gz" "${D}/pkg.AppImage" "${D}/build/tree.tar.gz"; do
+    [[ -e "${f}" ]] && glob_left=1
+done
+if [[ ${glob_left} -eq 0 ]]; then
+    ok "clean-packages removed every globbed artifact (*.deb/*.rpm/*.tar.gz/*.AppImage)"
+else
+    bad "clean-packages left globbed artifacts behind (cmake -E rm does not expand globs)"
+fi
+if [[ ! -d "${D}/build/appimage" ]]; then
+    ok "clean-packages removed build/appimage"
+else
+    bad "clean-packages left build/appimage"
+fi
+
+# clean-all must also honor the glob patterns.
+echo "--- clean-all really removes glob artifacts ---"
+touch "${D}/pkg2.deb" "${D}/pkg2.rpm"
+cmake --build "${D}/build" --target clean-all >/dev/null 2>&1 || true
+# clean-all schedules the build-dir removal asynchronously; the glob artifacts
+# outside the build dir are removed synchronously in the same target.
+if [[ ! -e "${D}/pkg2.deb" && ! -e "${D}/pkg2.rpm" ]]; then
+    ok "clean-all removed globbed artifacts"
+else
+    bad "clean-all left globbed artifacts behind"
+fi
+
 echo
 echo "=============================================="
 echo "passed: ${PASS}   failed: ${FAIL}"

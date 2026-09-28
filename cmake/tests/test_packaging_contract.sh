@@ -71,6 +71,45 @@ else
     bad "CPACK_STRIP_FILES should default OFF"
 fi
 
+# ---------------------------------------------------------------------------
+# SIOYEK_PACKAGE_FORMATS must actually drive CPACK_GENERATOR (it was previously
+# documented but never applied, so selecting a subset silently did nothing).
+# ---------------------------------------------------------------------------
+echo "--- SIOYEK_PACKAGE_FORMATS -> CPACK_GENERATOR ---"
+B="${WORK}/pkg_fmt"
+configure "${B}" -DSIOYEK_PACKAGE_FORMATS="TGZ"
+CFG="${B}/build/CPackConfig.cmake"
+if grep -qE 'CPACK_GENERATOR "?TGZ' "${CFG}" 2>/dev/null; then
+    ok "SIOYEK_PACKAGE_FORMATS=TGZ -> CPACK_GENERATOR=TGZ"
+else
+    bad "SIOYEK_PACKAGE_FORMATS is not wired to CPACK_GENERATOR"
+fi
+
+B="${WORK}/pkg_fmt2"
+configure "${B}" -DSIOYEK_PACKAGE_FORMATS="DEB;TGZ"
+CFG="${B}/build/CPackConfig.cmake"
+if grep -qE 'CPACK_GENERATOR "?DEB;TGZ' "${CFG}" 2>/dev/null; then
+    ok "multi-generator selection propagated (DEB;TGZ)"
+else
+    bad "multi-generator selection not propagated"
+fi
+
+# ---------------------------------------------------------------------------
+# Absolute install destinations must be redirected under CPack's staging root
+# so packaging never writes the host's /etc directly.
+# ---------------------------------------------------------------------------
+echo "--- CPack absolute-destination handling ---"
+if grep -qE 'CPACK_PACKAGING_INSTALL_PREFIX "/' "${CFG}" 2>/dev/null; then
+    ok "CPACK_PACKAGING_INSTALL_PREFIX set to / for absolute destinations"
+else
+    bad "CPACK_PACKAGING_INSTALL_PREFIX not set (absolute /etc/sioyek would hit the host)"
+fi
+if grep -qE 'CPACK_SET_DESTDIR "?ON' "${CFG}" 2>/dev/null; then
+    ok "CPACK_SET_DESTDIR enabled for absolute destinations"
+else
+    bad "CPACK_SET_DESTDIR not enabled"
+fi
+
 echo
 echo "=============================================="
 echo "passed: ${PASS}   failed: ${FAIL}"

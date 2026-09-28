@@ -37,11 +37,17 @@ if grep -q "\"linux-release\"" <<<"${pout}"; then ok "package preset: linux-rele
 workflows_dir="${REPO_ROOT}/.github/workflows"
 if [[ -d "${workflows_dir}" ]]; then
     ci_presets="$(grep -rhoE "cmake --preset [A-Za-z0-9_-]+" "${workflows_dir}" | awk '{print $3}' | sort -u)"
+    # NOTE: `cmake --list-presets` is platform-filtered (it omits windows-* on
+    # Linux), so validating CI references against it false-positives when a
+    # workflow legitimately uses a cross-platform preset name. Validate against
+    # the platform-independent CMakePresets.json parse instead.
+    all_presets="$(cmake -D SIOYEK_PRESETS_FILE="${REPO_ROOT}/CMakePresets.json" \
+        -P "${REPO_ROOT}/cmake/list-build-presets.cmake" 2>/dev/null)"
     if [[ -z "${ci_presets}" ]]; then
         ok "no CI preset references to check"
     else
         for cp in ${ci_presets}; do
-            if grep -q "\"${cp}\"" <<<"${out}"; then
+            if grep -qx "${cp}" <<<"${all_presets}"; then
                 ok "CI preset exists: ${cp}"
             else
                 bad "CI references unknown configure preset: ${cp}"
@@ -60,6 +66,41 @@ if grep -q "clean-deps" "${REPO_ROOT}/cmake/SioyekClean.cmake"; then
     ok "clean-deps target defined in SioyekClean.cmake"
 else
     bad "clean-deps target missing from SioyekClean.cmake"
+fi
+
+# 7) The Makefile discovers per-preset shortcut targets via a portable CMake
+#    script (no sed dependency). Verify it exists and lists every non-hidden
+#    configure preset, including the platform-specific ones.
+if [[ -f "${REPO_ROOT}/cmake/list-build-presets.cmake" ]]; then
+    ok "list-build-presets.cmake exists"
+    scripts_out="$(cmake -D SIOYEK_PRESETS_FILE="${REPO_ROOT}/CMakePresets.json" \
+        -P "${REPO_ROOT}/cmake/list-build-presets.cmake" 2>/dev/null)"
+    missing=0
+    for p in linux-release linux-debug linux-portable linux-vendored linux-ci \
+             linux-appimage linux-relwithdebinfo macos-release macos-debug \
+             windows-release windows-debug; do
+        grep -qx "${p}" <<<"${scripts_out}" || missing=1
+    done
+    if [[ ${missing} -eq 0 ]]; then
+        ok "list-build-presets.cmake lists every configure preset"
+    else
+        bad "list-build-presets.cmake is missing some presets"
+    fi
+    # It must NOT leak hidden presets (base/ninja/linux-base).
+    if grep -qE '^(base|ninja|linux-base)$' <<<"${scripts_out}"; then
+        bad "list-build-presets.cmake leaked hidden presets"
+    else
+        ok "list-build-presets.cmake excludes hidden presets"
+    fi
+else
+    bad "cmake/list-build-presets.cmake is missing"
+fi
+
+# 8) The Makefile must no longer depend on sed for preset discovery.
+if grep -q "list-build-presets.cmake" "${REPO_ROOT}/Makefile"; then
+    ok "Makefile uses the portable preset lister"
+else
+    bad "Makefile does not use the portable preset lister"
 fi
 
 echo

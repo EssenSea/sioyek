@@ -50,6 +50,15 @@ CMake is the source of truth for the build. The pieces that matter:
   `CMAKE_EXTRA_FLAGS`, `PREFIX`, `DESTDIR`, `JOBS`, ... (see
   `contrib/local.mk.example`). **The Makefile is authored and tracked: no clean
   target may ever delete it** (see §5).
+  The per-preset shortcut targets (`make <preset>`, `make install-<preset>`, ...)
+  are discovered by `cmake/list-build-presets.cmake`, a small CMake script that
+  parses `CMakePresets.json`. This replaced a `cmake --list-presets | sed`
+  pipeline, removing the `sed` dependency (and making the discovery work under
+  the Makefile's Windows branch).
+  The Makefile drives POSIX-sh recipes; on Windows run it from a POSIX
+  environment that provides `sh` and `make` (Git for Windows "Git Bash",
+  MSYS2, or Cygwin). It fails fast with an actionable message if no POSIX shell
+  is available instead of silently running broken recipes.
 * `cmake/Sioyek*.cmake` — modular concerns: `BuildTypes` (optimization, strip,
   LTO, ccache, unity), `Dependencies` (unified config/module/pkg-config
   resolver), `Mupdf` and `SQLite` (consumption contracts), `Install` (the
@@ -241,9 +250,19 @@ make options            # list every flag and the CMake variable it maps to
 
 * All four prefixes work for every option (autoconf semantics).
 * An unknown option aborts with a pointer to `make options`.
-* The mapping lives in `cmake/parse-build-options.sh` (single source of truth),
-  shared by `./configure`, `make options` and the shell completion, and guarded
-  by `test_make_options_contract.sh`.
+* **Values are validated up front.** Options with a fixed set of accepted values
+  (`SIOYEK_USE_SYSTEM_MUPDF` = `AUTO|ON|OFF`, `SIOYEK_INSTALL_LAYOUT` =
+  `standard|portable`, `SIOYEK_MUPDF_UNEMBED_FONTS` = `OFF|CJK|CJK_LANG|ALL`,
+  `SIOYEK_ENABLE_CCACHE`, `SIOYEK_STRICT_NON_THIRD_PARTY_WARN`,
+  `SIOYEK_WERROR_RETURN_TYPE`, `SIOYEK_USE_SYSTEM_SQLITE`,
+  `SIOYEK_INSTALL_QT_DEPLOY`, `SIOYEK_SQLITE_TRIM`) are checked against an enum
+  table; an invalid value fails immediately instead of reaching CMake.
+* Values containing whitespace, or empty install-directory values, are rejected:
+  they would otherwise be word-split by `make` when the recorded
+  `SIOYEK_CONFIGURE_FLAGS` is re-expanded, changing the intended `-D` argument.
+* The mapping (and the enum table) lives in `cmake/parse-build-options.sh`
+  (single source of truth), shared by `./configure`, `make options` and the
+  shell completion, and guarded by `test_make_options_contract.sh`.
 
 ---
 
@@ -451,6 +470,16 @@ Implications to be aware of:
   `-DCMAKE_INSTALL_PREFIX=/usr/local` while the binary looks under `/usr`),
   resource lookup will not match. Use a matching prefix (the presets set
   `/usr`).
+* **This mismatch is now checked at configure time.** `SioyekInstall.cmake`
+  compares `CMAKE_INSTALL_FULL_SYSCONFDIR`/`CMAKE_INSTALL_FULL_DATADIR` against
+  the runtime's hard-coded `/etc` and `/usr/share`:
+  * under the `standard` layout with a different prefix it emits a **WARNING**
+    naming the exact fix (so the documented preset-less `cmake -S . -B build`
+    workflow keeps working);
+  * set `-DSIOYEK_STRICT_INSTALL_PREFIX=ON` to promote that to a hard
+    **FATAL_ERROR** (recommended for CI and packaging);
+  * the `portable` layout is the sanctioned way to relocate the tree and never
+    triggers the warning.
 * The config destination uses the **absolute** sysconfdir
   (`CMAKE_INSTALL_FULL_SYSCONFDIR`), not the prefix-relative one. With the
   conventional `-DCMAKE_INSTALL_PREFIX=/usr`, using the relative form would
@@ -521,7 +550,28 @@ Run `cmake --list-presets` to see all. Summary:
 | `linux-vendored` | Release | yes | vendored mupdf/sqlite (reproducible) |
 | `linux-ci` | Release | no | fast CI build |
 | `macos-release` / `macos-debug` | | | |
-| `windows-release` / `windows-debug` | | | MSVC |
+| `windows-release` / `windows-debug` | | | MSVC (see the Windows note below) |
+
+#### Windows support status (be precise)
+
+The `windows-*` presets exist and are recognized by CMake, but the **vendored
+mupdf route cannot be built under MSVC**: mupdf's own Windows build is a Visual
+Studio solution (`mupdf/platform/win32/mupdf.sln`), whereas `SioyekMupdf.cmake`
+drives mupdf's POSIX Makefile. `SioyekMupdf.cmake` therefore fails fast at
+configure time with an actionable message for the `WIN32 AND MSVC` + vendored
+combination (it names `mupdf.sln` and the alternatives).
+
+To produce a Windows binary today either:
+
+* provide a system/prebuilt mupdf and configure with
+  `-DSIOYEK_USE_SYSTEM_MUPDF=ON` (make it discoverable via `CMAKE_PREFIX_PATH`
+  or a pkg-config file), or
+* use the legacy qmake release path (`build_windows.bat`), which builds
+  `mupdf.sln` directly.
+
+`windows-cmake-validate` in `.github/workflows/cmake_build.yml` runs on
+`windows-latest` and asserts this behaviour (plus that CMake recognizes the
+presets), so the Windows CMake path has at least one real CI signal.
 
 ---
 

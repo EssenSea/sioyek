@@ -340,6 +340,24 @@ else
     bad "default did not resolve to a job count (got -j${j})"
 fi
 
+# ---------------------------------------------------------------------------
+# 6. Windows/MSVC must fail fast with an actionable message for the vendored
+#    route (mupdf's own Windows build is a VS solution this CMake build cannot
+#    drive through its POSIX Makefile).
+# ---------------------------------------------------------------------------
+echo "--- Windows/MSVC vendored-mupdf diagnostic ---"
+MUPDF_CMAKE="${REPO_ROOT}/cmake/SioyekMupdf.cmake"
+if grep -q "WIN32 AND MSVC" "${MUPDF_CMAKE}"; then
+    ok "SioyekMupdf.cmake guards the MSVC + vendored combination"
+else
+    bad "SioyekMupdf.cmake has no MSVC guard for the vendored route"
+fi
+if grep -q "mupdf.sln\|Visual Studio solution" "${MUPDF_CMAKE}"; then
+    ok "diagnostic points at mupdf.sln / the VS solution path"
+else
+    bad "diagnostic does not mention the Windows mupdf build path"
+fi
+
 echo
 echo "=============================================="
 echo "passed: ${PASS}   failed: ${FAIL}"
