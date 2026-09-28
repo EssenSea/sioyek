@@ -173,6 +173,29 @@ jobs:
           fi
           echo "packaged binary resolves all dynamic dependencies"
 
+      # Software Bill of Materials (SLSA: make the build inputs inspectable).
+      #
+      # WHY: the release artifacts statically embed several third-party
+      # components (mupdf and its freetype/harfbuzz/brotli/libjpeg/lcms2/mujs/
+      # zlib; the SQLite amalgamation; fzf; utf8cpp; rapidfuzz). A consumer has
+      # no practical way to inventory those from the binary alone. The SBOM
+      # records exactly what went into THIS build, in SPDX JSON, alongside the
+      # packages it describes.
+      #
+      # The output is uploaded as a release asset, not merely kept as a CI
+      # artifact, so it travels with the binary it documents.
+      - name: Generate SBOM (SPDX JSON)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          # Scan the staged install tree rather than the source, so the SBOM
+          # reflects what is actually shipped.
+          path: build/linux-release
+          format: spdx-json
+          output-file: sioyek-${{ github.ref_name }}.spdx.json
+          artifact-name: cmake-linux-sbom
+          upload-artifact: true
+          upload-release-assets: false
+
       - name: Upload packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -308,4 +331,5 @@ jobs:
             dist/**/*.rpm
             dist/**/*.tar.gz
             dist/**/*.zip
+            dist/**/*.spdx.json
           fail_on_unmatched_files: true
