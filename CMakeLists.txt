@@ -273,5 +273,8 @@ endif()
 # collect all variables defined above)
 include(SioyekPackaging)
 
+# AppImage packaging target (Linux only; enabled by the linux-appimage preset).
+include(SioyekAppImage)
+
 # Clean-up targets (clean-all / clean-packages / clean-stage / clean-in-source).
 include(SioyekClean)

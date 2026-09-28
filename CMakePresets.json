@@ -84,7 +84,8 @@
         "SIOYEK_INSTALL_QT_DEPLOY": "ON",
         "SIOYEK_ENABLE_LTO": "ON",
         "SIOYEK_STRIP_ON_INSTALL": "ON",
-        "SIOYEK_PACKAGE_STRIP": "ON"
+        "SIOYEK_PACKAGE_STRIP": "ON",
+        "SIOYEK_BUILD_APPIMAGE": "ON"
       }
     },
     {
