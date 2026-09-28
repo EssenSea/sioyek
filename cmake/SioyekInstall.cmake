@@ -214,4 +214,37 @@ else()
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Uninstall target.
+#
+# CMake deliberately does not generate an uninstall rule, but `cmake --install`
+# records every file it wrote in install_manifest.txt, so a supported uninstall
+# is a replay of that manifest. Without this target a user who ran
+# `cmake --install` had no supported way back -- they had to hunt the files
+# down by hand, which for the 'standard' layout (which legitimately writes to
+# /etc/sioyek) is both tedious and error-prone.
+#
+# Semantics, matching what a packager expects from `make uninstall`:
+#   * reads $DESTDIR-prefixed paths from install_manifest.txt, so an uninstall
+#     from a staged tree removes the staged copies and nothing else;
+#   * removes only files that were actually installed and still exist;
+#   * prunes directories that the install created and that are now empty,
+#     walking from deepest to shallowest so parents are considered only after
+#     their children -- this is what avoids leaving empty /usr/share/sioyek
+#     shells behind, while never deleting a directory that still holds files;
+#   * refuses to act when there is no manifest, instead of silently doing
+#     nothing (a silent no-op would let a stale install look removed).
+#
+# The manifest lives in the build directory (CMAKE_BINARY_DIR), not the source
+# tree, so this never touches tracked files.
+# ---------------------------------------------------------------------------
+if(UNIX)
+    add_custom_target(uninstall
+        COMMAND ${CMAKE_COMMAND} -E env
+                "SIOYEK_UNINSTALL_MANIFEST=${CMAKE_BINARY_DIR}/install_manifest.txt"
+                ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SioyekUninstall.cmake"
+        COMMENT "Removing files installed by the install contract (honours DESTDIR)"
+        VERBATIM)
+endif()
+
 message(STATUS "sioyek: install contract enabled (layout=${SIOYEK_INSTALL_LAYOUT}, prefix=${CMAKE_INSTALL_PREFIX})")
