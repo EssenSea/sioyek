@@ -11,7 +11,7 @@ TOTAL_FAIL=0
 
 for t in test_mupdf_contract.sh test_sqlite_contract.sh test_install_contract.sh \
          test_buildtypes_contract.sh test_clean_contract.sh test_packaging_contract.sh \
-         test_warnings_contract.sh test_presets.sh; do
+         test_warnings_contract.sh test_presets.sh test_make_options_contract.sh; do
     echo
     echo "############################################################"
     echo "# ${t}"

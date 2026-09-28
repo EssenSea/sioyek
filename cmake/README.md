@@ -123,6 +123,33 @@ ctest --test-dir build --output-on-failure
 
 ---
 
+## 2b. Friendly build options (`--enable-*` / `--with-*`)
+
+The CMake `-DSIOYEK_*` cache variables are the source of truth, but the top-level
+Makefile wraps them in familiar autoconf-style flags so users do not have to
+remember the spelling. Pass them through `EXTRA_CMAKE_ARGS`:
+
+```sh
+make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"
+make build EXTRA_CMAKE_ARGS="--with-system-mupdf --with-install-layout=portable"
+make install DESTDIR=/tmp/stage EXTRA_CMAKE_ARGS="--enable-strip-on-install"
+make options            # list every supported flag and the CMake variable it maps to
+```
+
+| Friendly flag | CMake variable |
+|---|---|
+| `--enable-X` / `--disable-X` | `-DSIOYEK_*=ON` / `=OFF` (booleans) |
+| `--with-X` / `--without-X` | `-DSIOYEK_*=ON` / `=OFF` (tri-state) |
+| `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (tri-state or value) |
+
+* Bare names (`enable-lto`) are accepted too.
+* Raw `-D` flags still pass through unchanged.
+* An unknown option aborts the build with a pointer to `make options`.
+* The mapping lives in `cmake/parse-build-options.sh` (single source of truth);
+  `make options` prints it, and `test_make_options_contract.sh` guards it.
+
+---
+
 ## 3. Modules in detail
 
 ### 3.1 `SioyekBuildTypes.cmake`

@@ -4,8 +4,11 @@
 # Default preset used by `make`:
 # PRESET = linux-vendored
 
-# Extra CMake configure flags:
+# Extra CMake configure flags (raw -D; see cmake/README.md):
 # CMAKE_EXTRA_FLAGS = -DSIOYEK_MUPDF_UNEMBED_FONTS=CJK -DSIOYEK_ENABLE_LTO=ON
+
+# Friendly autoconf-style options (translated to -DSIOYEK_*; run `make options`):
+# EXTRA_CMAKE_ARGS = --enable-lto --disable-tests --with-system-mupdf
 
 # Install prefix / staging:
 # PREFIX = /usr/local

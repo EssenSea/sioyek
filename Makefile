@@ -9,6 +9,9 @@
 #   make PRESET=linux-vendored
 #   make test
 #   make install DESTDIR=/tmp/stage
+#   make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"
+#   make build EXTRA_CMAKE_ARGS="--with-system-mupdf --with-install-layout=portable"
+#   make options               # list friendly --enable/--disable/--with flags
 #   make distclean             # remove build/ and all generated artifacts
 #   make help                  # list targets
 #
@@ -47,6 +50,13 @@ BUILD_DIR ?= build/$(PRESET)
 #   make CMAKE_EXTRA_FLAGS='-DSIOYEK_MUPDF_UNEMBED_FONTS=CJK'
 CMAKE_EXTRA_FLAGS ?=
 
+# Friendly, autoconf-style build options, e.g.
+#   make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"
+#   make build EXTRA_CMAKE_ARGS="--with-system-mupdf --with-install-layout=portable"
+#   make options        # list them
+# These are translated to -DSIOYEK_* flags by cmake/options.mk below.
+EXTRA_CMAKE_ARGS ?=
+
 # Install staging dir; DESTDIR is honored by CMake's install step.
 DESTDIR ?=
 PREFIX ?=
@@ -55,8 +65,11 @@ JOBS ?= $(NPROC)
 # Untracked local overrides (like neovim's local.mk).
 -include local.mk
 
+# Friendly --enable/--disable/--with option translation (defines SIOYEK_OPTION_FLAGS).
+include cmake/options.mk
+
 .PHONY: all build configure phony-configure test install package appimage \
-        format format-check lint deps checkprefix \
+        format format-check lint deps checkprefix options \
         clean distclean clean-build clean-deps clean-stage clean-packages clean-in-source \
         list-presets help
 
@@ -67,7 +80,7 @@ build: configure
 	$(CMAKE) --build --preset $(PRESET) -j$(JOBS)
 
 configure:
-	$(CMAKE) --preset $(PRESET) $(CMAKE_EXTRA_FLAGS)
+	$(CMAKE) --preset $(PRESET) $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
 
 # ---- Test -------------------------------------------------------------------
 test: configure
@@ -98,7 +111,7 @@ LINUXDEPLOY_QT_URL ?= https://github.com/linuxdeploy/linuxdeploy-plugin-qt/relea
 
 appimage:
 	@echo "==> Configure/build ($(APPIMAGE_PRESET))"
-	$(CMAKE) --preset $(APPIMAGE_PRESET) $(CMAKE_EXTRA_FLAGS)
+	$(CMAKE) --preset $(APPIMAGE_PRESET) $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
 	$(CMAKE) --build --preset $(APPIMAGE_PRESET) -j$(JOBS)
 	@echo "==> Stage install into AppDir"
 	rm -rf "$(APPDIR)"
@@ -230,4 +243,7 @@ help:
 	@echo '  make deps                 fetch mupdf submodules'
 	@echo '  make list-presets         list available CMake presets'
 	@echo ''
-	@echo 'Variables: PRESET BUILD_DIR CMAKE_EXTRA_FLAGS DESTDIR PREFIX JOBS'
+	@echo '  make options              list friendly --enable/--disable/--with build options'
+	@echo ''
+	@echo 'Variables: PRESET BUILD_DIR EXTRA_CMAKE_ARGS CMAKE_EXTRA_FLAGS DESTDIR PREFIX JOBS'
+	@echo 'Friendly options: make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"'
