@@ -18,6 +18,20 @@ name: CMake Build & Contract Tests
 #     (1.26.11). The system-mupdf route is therefore not exercised by a real
 #     build in CI; its decision matrix is covered by the contract tests instead.
 #     The vendored route (default) is fully built.
+#
+# [4] Windows / MSVC
+#     `windows-release` / `windows-debug` were declared presets that no workflow
+#     ever exercised (the release pipelines still call the legacy qmake
+#     `build_windows.bat`). `windows-cmake-validate` now checks the Windows CMake
+#     path: the Visual Studio generator is Windows-only, so this is the only
+#     place the Windows configure step can be validated at all.
+#
+#     The *vendored* mupdf route is not MSVC-buildable: mupdf's Windows build is
+#     a Visual Studio solution (mupdf/platform/win32/mupdf.sln), not the POSIX
+#     Makefile this CMake build drives. SioyekMupdf.cmake therefore fails fast at
+#     configure time with an actionable message; the job asserts that message.
+#     A real Windows binary from the CMake path still needs a system/prebuilt
+#     mupdf (SIOYEK_USE_SYSTEM_MUPDF=ON or the legacy qmake path).
 # ---------------------------------------------------------------------------
 
 on:
@@ -171,3 +185,72 @@ jobs:
         run: |
           BUILD_DIR="$(bash cmake/tests/resolve_preset_bindir.sh linux-ci)"
           ctest --test-dir "${BUILD_DIR}" --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Windows / MSVC preset validation.
+  #
+  # The `windows-release` / `windows-debug` presets were declared but never
+  # exercised by any workflow (the release pipelines still call the legacy qmake
+  # `build_windows.bat`). This job validates what the CMake path can actually do
+  # on Windows today:
+  #
+  #   * the Visual Studio generator is Windows-only, so this is the only place
+  #     the Windows CMake configure step can be checked at all;
+  #   * the *vendored* mupdf route is not MSVC-buildable (mupdf's Windows build
+  #     is a VS solution, not the POSIX Makefile this build drives), so this
+  #     combination must stop at configure time with an actionable message. The
+  #     job asserts that message instead of pretending to build it;
+  #   * the presets themselves (generator, config mapping, build presets) are
+  #     recognized by CMake.
+  #
+  # Producing a real Windows binary from the CMake path needs a system/prebuilt
+  # mupdf (SIOYEK_USE_SYSTEM_MUPDF=ON) and is tracked separately.
+  # ---------------------------------------------------------------------------
+  windows-cmake-validate:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC (Visual Studio 2022 x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Toolchain versions
+        run: cmake --version
+
+      - name: The Windows presets are recognized by CMake
+        run: |
+          cmake --list-presets=build
+          cmake --list-presets=build | Select-String -Pattern "windows-release","windows-debug"
+
+      # The documented contract: vendored mupdf + MSVC fails fast at configure
+      # time with a message that names the Windows mupdf build path. We assert
+      # the *message* (not just a non-zero exit) so a future prebuilt-mupdf
+      # change is noticed explicitly.
+      - name: Vendored mupdf under MSVC fails with a clear diagnostic
+        run: |
+          $log = Join-Path $PWD "vendored-msvc.log"
+          cmake --preset windows-release -DSIOYEK_USE_SYSTEM_MUPDF=OFF *>&1 |
+            Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          $text = Get-Content $log -Raw
+          if ($code -eq 0) {
+            Write-Error "vendored mupdf + MSVC unexpectedly configured successfully"
+            exit 1
+          }
+          if ($text -notmatch "vendored mupdf cannot be built with MSVC") {
+            Write-Error "expected the MSVC/vendored-mupdf diagnostic"
+            Get-Content $log | Select-Object -Last 40
+            exit 1
+          }
+          if ($text -notmatch "mupdf.sln|Visual Studio solution") {
+            Write-Error "diagnostic does not point at the Windows mupdf build path"
+            exit 1
+          }
+          Write-Host "configure failed with the documented, actionable diagnostic"
