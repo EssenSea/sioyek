@@ -78,13 +78,15 @@ else()
     set(_sioyek_werror_return_type OFF)
 endif()
 
-# Compiler-specific flag: probe before adding
+# Compiler-specific flag: probe before adding.
+# Defensive: treat an undefined/falsey probe result as "unsupported" instead of
+# relying on a bare if(${var}) that can misbehave for empty/odd values.
 function(_sioyek_add_flag_if_supported target flag)
     string(MAKE_C_IDENTIFIER "SIOYEK_HAVE_${flag}" _var)
     if(NOT DEFINED ${_var})
         check_cxx_compiler_flag("${flag}" ${_var})
     endif()
-    if(${${_var}})
+    if(DEFINED ${_var} AND ${_var})
         target_compile_options(${target} PRIVATE "${flag}")
     endif()
 endfunction()

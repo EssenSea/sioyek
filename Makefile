@@ -18,25 +18,53 @@
 # See cmake/README.md for the full build system documentation.
 # =============================================================================
 
-# ---- Platform detection (neovim-style) -------------------------------------
+# ---- Platform detection ----------------------------------------------------
+# This Makefile runs POSIX-sh recipes (it is a thin wrapper around CMake, and
+# every per-preset/install/test/clean recipe relies on a POSIX shell). On
+# Windows that shell is provided by Git for Windows / MSYS2 / Cygwin, which is
+# also what supplies `make` itself. We therefore locate a POSIX `sh` explicitly
+# and fail with actionable guidance if none exists, instead of pretending a
+# PowerShell recipe translation exists (an earlier revision aliased SHELL to
+# powershell.exe but kept POSIX-only recipes such as `[ -d ... ]`, `sed`, and
+# `find | xargs`, which cannot work there).
+#
+# `cmake` is required and discovered portably: on Windows `where` resolves it,
+# elsewhere `command -v`; CMake's own location is also honored via $CMAKE.
+
 ifeq ($(OS),Windows_NT)
-  UNIX_LIKE := FALSE
+  HOST_IS_WINDOWS := TRUE
 else
-  UNIX_LIKE := TRUE
+  HOST_IS_WINDOWS := FALSE
 endif
 
-ifeq ($(UNIX_LIKE),FALSE)
-  SHELL := powershell.exe
-  .SHELLFLAGS := -NoProfile -NoLogo
-  RM := remove-item -force
-  CMAKE := cmake
-  NPROC := $(NUMBER_OF_PROCESSORS)
-else
-  RM := rm -rf
-  CMAKE := $(shell command -v cmake3 2>/dev/null || command -v cmake)
-  NPROC := $(shell (command -v nproc >/dev/null 2>&1 && nproc) \
-                 || (command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu) \
-                 || echo 1)
+# Prefer an explicitly provided CMAKE, else cmake3, else cmake.
+CMAKE ?= $(shell command -v cmake3 2>/dev/null || command -v cmake 2>/dev/null)
+
+# POSIX shell used for recipes. On Windows, GNU make's default SHELL is cmd.exe;
+# point it at sh if available (Git Bash / MSYS2). We probe a few common names.
+ifeq ($(HOST_IS_WINDOWS),TRUE)
+  ifeq ($(origin SHELL),default)
+    SHELL := $(shell (command -v sh 2>/dev/null) || (command -v bash 2>/dev/null))
+  endif
+endif
+
+RM := rm -rf
+
+# Parallelism: nproc -> sysctl -> Windows NUMBER_OF_PROCESSORS -> 1.
+NPROC := $(shell (command -v nproc >/dev/null 2>&1 && nproc) \
+               || (command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu) \
+               || echo $(if $(NUMBER_OF_PROCESSORS),$(NUMBER_OF_PROCESSORS),1))
+
+# ---- Tool sanity checks ----------------------------------------------------
+# Fail early with actionable messages rather than mid-build.
+ifeq ($(strip $(CMAKE)),)
+  $(error cmake was not found in PATH. Install CMake >= 3.25 (presets) and re-run)
+endif
+
+ifeq ($(HOST_IS_WINDOWS),TRUE)
+  ifeq ($(strip $(SHELL)),)
+    $(error This Makefile drives POSIX-sh recipes. On Windows run it from a POSIX environment that provides 'sh' and 'make' (Git for Windows "Git Bash", MSYS2, or Cygwin), and ensure 'sh' is on PATH)
+  endif
 endif
 
 # ---- Configuration ---------------------------------------------------------
@@ -49,7 +77,7 @@ BUILD_DIR ?= build/$(PRESET)
 # Discovered configure presets, for the per-preset shortcut targets below
 # (e.g. `make linux-vendored`, `make install-linux-vendored`). Derived from CMake
 # so it stays in sync with CMakePresets.json; empty if cmake is unavailable.
-SIOYEK_PRESETS := $(shell $(CMAKE) --list-presets 2>/dev/null | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p')
+SIOYEK_PRESETS := $(shell $(CMAKE) -D SIOYEK_PRESETS_FILE=$(CURDIR)/CMakePresets.json -P $(CURDIR)/cmake/list-build-presets.cmake 2>/dev/null)
 
 # Extra CMake configure flags, e.g.
 #   make CMAKE_EXTRA_FLAGS='-DSIOYEK_MUPDF_UNEMBED_FONTS=CJK'

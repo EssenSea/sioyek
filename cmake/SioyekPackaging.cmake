@@ -19,9 +19,13 @@
 
 include_guard(GLOBAL)
 
-# Generator priority: user-overridable
+# Generator priority: user-overridable.
 set(SIOYEK_PACKAGE_FORMATS "DEB;RPM;TGZ" CACHE STRING
     "CPack generators to enable (semicolon-separated), e.g. DEB;RPM;TGZ.")
+
+# Wire the selection through to CPack (it was previously documented but never
+# actually applied, so -DSIOYEK_PACKAGE_FORMATS=TGZ had no effect).
+set(CPACK_GENERATOR "${SIOYEK_PACKAGE_FORMATS}")
 
 set(CPACK_PACKAGE_NAME        "sioyek")
 set(CPACK_PACKAGE_VENDOR      "sioyek")
@@ -46,6 +50,21 @@ set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)
 
 # Do not package the manifest that CPack itself should not include
 set(CPACK_MONOLITHIC_INSTALL ON)
+
+# ---------------------------------------------------------------------------
+# Absolute install destinations and CPack.
+#
+# The install contract places keys.config/prefs.config at the *absolute*
+# CMAKE_INSTALL_FULL_SYSCONFDIR (/etc/sioyek) so the runtime finds them. CPack
+# would otherwise try to write that path on the build host directly and fail
+# (or, worse, populate the real /etc). Prefixing the package root with "/" and
+# enabling CPACK_SET_DESTDIR makes CPack stage everything under its own
+# temporary tree and record the absolute paths inside the package instead.
+# ---------------------------------------------------------------------------
+if(UNIX AND NOT APPLE)
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/")
+    set(CPACK_SET_DESTDIR ON)
+endif()
 
 # Strip policy for packaged binaries (opt-in; see SioyekBuildTypes.cmake).
 if(SIOYEK_PACKAGE_STRIP)

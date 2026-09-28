@@ -39,6 +39,23 @@ mupdf-unembed-fonts:SIOYEK_MUPDF_UNEMBED_FONTS
 package-formats:SIOYEK_PACKAGE_FORMATS
 "
 
+# Constrained-value table: feature-name:allowed-values (space separated).
+# Used to fail fast on typos instead of silently passing a bogus value to CMake
+# (which previously surfaced only later, or was silently ignored). Options not
+# listed here accept any non-empty value. The special value "ANY" means the
+# option accepts arbitrary values (e.g. a free-form version string).
+ENUMS="
+ccache:AUTO,ON,OFF
+strict-warnings:AUTO,ON,OFF
+werror-return-type:AUTO,ON,OFF
+system-mupdf:AUTO,ON,OFF
+system-sqlite:AUTO,ON,OFF
+install-layout:standard,portable
+mupdf-unembed-fonts:OFF,CJK,CJK_LANG,ALL
+install-qt-deploy:ON,OFF
+sqlite-trim:ON,OFF
+"
+
 # Installation-directory options (autoconf/GNUInstallDirs style): name:CMakeVar.
 # These take a DIR value, e.g. --prefix=/usr, --sysconfdir=/etc.
 DIRS="
@@ -81,6 +98,53 @@ auto) echo AUTO ;;
 esac
 }
 
+# Validate a value: reject characters that would break the "config.mk ->
+# make -> -D flag" round-trip (word splitting / shell injection), and enforce
+# the ENUMS table when one is registered for this option.
+# Usage: _validate_value <option-name> <value>   (prints nothing, exits 2 on error)
+_validate_value() {
+_vn=$1
+_vv=$2
+case "$_vv" in
+"")
+    echo "error: option '--$_vn' was given an empty value" >&2
+    exit 2
+    ;;
+*[[:space:]]*)
+    echo "error: option '--$_vn' value '$_vv' contains whitespace;" >&2
+    echo "       values must be a single unquoted token (no spaces/tabs)" >&2
+    exit 2
+    ;;
+*\"*)
+    echo "error: option '--$_vn' value '$_vv' contains a double quote" >&2
+    exit 2
+    ;;
+*\'*)
+    echo "error: option '--$_vn' value '$_vv' contains a single quote" >&2
+    exit 2
+    ;;
+esac
+# Enforce the ENUMS table, if any, for this option (case-insensitive).
+for _ep in $ENUMS; do
+    _ek=${_ep%%:*}
+    _ev=$(echo "${_ep#*:}" | tr ',' ' ')
+    if [ "$_ek" = "$_vn" ]; then
+        _ok=0
+        _vnorm=$(echo "$_vv" | tr '[:upper:]' '[:lower:]')
+        for _e in $_ev; do
+            _enorm=$(echo "$_e" | tr '[:upper:]' '[:lower:]')
+            [ "$_vnorm" = "$_enorm" ] && { _ok=1; break; }
+        done
+        if [ "$_ok" = 0 ]; then
+            echo "error: invalid value '$_vv' for --$_vn (allowed: $_ev)" >&2
+            exit 2
+        fi
+        break
+    fi
+done
+return 0
+}
+
 out=""
 for a in "$@"; do
 # Allow bare names by adding a default --enable/--with prefix heuristically:
@@ -101,6 +165,21 @@ dkey=${a#--}; dkey=${dkey%%=*}; dval=${a#*=}
 for pair in $DIRS; do
 k=${pair%%:*}; v=${pair##*:}
 if [ "$k" = "$dkey" ]; then
+if [ -z "$dval" ]; then
+echo "error: option '--$dkey' was given an empty value" >&2
+exit 2
+fi
+case "$dval" in
+*[[:space:]]*)
+echo "error: option '--$dkey' value '$dval' contains whitespace;" >&2
+echo "       install-directory values must be a single unquoted token" >&2
+exit 2
+;;
+*\"*|*\'*)
+echo "error: option '--$dkey' value '$dval' contains a quote" >&2
+exit 2
+;;
+esac
 out="$out -D$v=$dval"
 matched=1
 break
@@ -137,6 +216,7 @@ done
 if [ -n "$var" ]; then
 if [ -n "$val" ]; then
 # explicit value wins over the prefix direction
+_validate_value "$name" "$val"
 out="$out -D$var=$(_normalize_value "$val")"
 else
 case "$dir" in

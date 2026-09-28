@@ -102,6 +102,26 @@ set(_sioyek_dep_clean_dirs
 )
 
 # ---------------------------------------------------------------------------
+# Robust removal helpers.
+#
+# IMPORTANT: `cmake -E rm` does NOT perform glob expansion. Passing a pattern
+# such as "<root>/*.deb" to it makes it treat '*' as a literal character, so it
+# exits 0 while removing nothing -- a silent no-op that previously left every
+# packaging artifact behind. Glob patterns are therefore expanded by a real
+# shell (`sh -c 'rm -rf <pattern>'`), whereas literal paths/dirs are removed
+# with the portable `cmake -E rm -rf` (no shell dependency).
+# ---------------------------------------------------------------------------
+
+# Build a "rm -rf <glob> <glob> ..." shell snippet from glob patterns.
+# Patterns are never user-supplied and never overlap _sioyek_protected_files.
+function(_sioyek_glob_rm_command out_var)
+    set(_cmd "rm -rf")
+    foreach(_g IN LISTS ARGN)
+        string(APPEND _cmd " ${_g}")
+    endforeach()
+    set(${out_var} "${_cmd}" PARENT_SCOPE)
+endfunction()
+# ---------------------------------------------------------------------------
 # clean-stage / clean-packages / clean-in-source
 # ---------------------------------------------------------------------------
 add_custom_target(clean-stage
@@ -109,10 +129,10 @@ add_custom_target(clean-stage
     COMMENT "Cleaning staged install output"
     VERBATIM)
 
+_sioyek_glob_rm_command(_sioyek_glob_rm ${_sioyek_clean_globs})
 add_custom_target(clean-packages
-    COMMAND ${CMAKE_COMMAND} -E rm -rf
-        "${_sioyek_repo_root}/build/appimage"
-        ${_sioyek_clean_globs}
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${_sioyek_repo_root}/build/appimage"
+    COMMAND sh -c "${_sioyek_glob_rm}"
     COMMENT "Cleaning packaging artifacts"
     VERBATIM)
 
@@ -136,20 +156,28 @@ add_custom_target(clean-in-source
 #
 # Deleting the build directory from within a build target would make ninja/make
 # fail to write their log ("No such file or directory"). To avoid that, the
-# deletion is scheduled in a *detached background* process that removes the
-# directory ~1 second after the build tool has returned. This keeps the build
-# command exit status clean.
+# removal is delegated to a *detached* background helper that waits until the
+# current (build-tool) process has exited (polling its PID via `kill -0`)
+# before descending on the tree. This replaces an earlier fixed `sleep 1`,
+# which was an unreliable race, and keeps the build command's exit status clean.
+#
+# Portability: the detached-removal step requires a POSIX `sh`; on Windows use
+# the `clean-in-source` / `clean-stage` / `clean-packages` targets instead (the
+# whole-tree targets are not meaningful under the MSVC generators anyway).
 # ---------------------------------------------------------------------------
 function(_sioyek_add_clean_all target_name)
     add_custom_target(${target_name}
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${_sioyek_clean_dirs}
-        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_sioyek_clean_globs}
+        COMMAND sh -c "${_sioyek_glob_rm}"
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${_sioyek_insource_files} ${_sioyek_insource_dirs}
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${_sioyek_dep_clean_dirs}
-        # Schedule a detached removal of the whole build directory.
+        # Remove the whole build tree LAST, and delete it from OUTSIDE so the
+        # running build tool can still write its log. We use a detached helper
+        # that waits for this process to exit (no fixed sleep race): it polls
+        # for the parent PID instead of sleeping a magic second.
         COMMAND ${CMAKE_COMMAND} -E echo
-            "Scheduling removal of the build directory '${CMAKE_BINARY_DIR}'..."
-        COMMAND sh -c "( sleep 1; rm -rf '${CMAKE_BINARY_DIR}' ) >/dev/null 2>&1 &"
+            "Removing the build directory '${CMAKE_BINARY_DIR}' after the build tool exits..."
+        COMMAND sh -c "nohup sh -c 'while kill -0 $$$$ 2>/dev/null; do sleep 0.2; done; rm -rf \"${CMAKE_BINARY_DIR}\"' >/dev/null 2>&1 &"
         COMMENT "Cleaning ALL build artifacts (build directory removed shortly after)"
         VERBATIM)
 endfunction()
@@ -164,8 +192,8 @@ _sioyek_add_clean_all(distclean)
 add_custom_target(clean-build
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${_sioyek_dep_clean_dirs}
     COMMAND ${CMAKE_COMMAND} -E echo
-        "Scheduling removal of the whole build tree '${_sioyek_repo_root}/build'..."
-    COMMAND sh -c "( sleep 1; rm -rf '${_sioyek_repo_root}/build' ) >/dev/null 2>&1 &"
+        "Removing the whole build tree '${_sioyek_repo_root}/build' after the build tool exits..."
+    COMMAND sh -c "nohup sh -c 'while kill -0 $$$$ 2>/dev/null; do sleep 0.2; done; rm -rf \"${_sioyek_repo_root}/build\"' >/dev/null 2>&1 &"
     COMMENT "Cleaning the entire build/ tree"
     VERBATIM)
 
