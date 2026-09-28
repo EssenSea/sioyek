@@ -1,16 +1,24 @@
 #!/bin/sh
-# Translate friendly build options (--enable-X / --disable-X / --with-X[=V]) into
-# -DSIOYEK_* CMake flags. Backed by cmake/options.mk's tables via env vars.
+# Translate friendly build options into -DSIOYEK_* CMake flags.
 #
-# Usage: parse-build-options.sh "<args...>"
-# Prints the resulting "-D..." flags on stdout; exits non-zero on unknown option.
+# Autoconf conventions: the same option may be written with any of the prefixes
+#   --enable-X / --with-X      ->  -DSIOYEK_*=ON   (or =VALUE with --enable-X=V)
+#   --disable-X / --without-X  ->  -DSIOYEK_*=OFF
+# and, per autoconf, an explicit value overrides the prefix direction:
+#   --disable-X=yes   == --enable-X=yes  (yes/on/true/1 -> ON)
+#   --enable-X=no     == --disable-X     (no/off/false/0 -> OFF)
+#   anything else is passed verbatim as the value.
+#
+# The prefix may be omitted for --enable/--disable (bare "enable-lto").
+# Raw -D flags are passed through. Unknown options are an error.
+#
+# Prints the resulting "-D..." flags on stdout; exits 2 on an unknown option.
 
 set -eu
 
-ARGS="$*"
-
-# name:CMakeVar tables (keep in sync with `make options`).
-BOOL_OPTIONS="
+# The single option table: name:CMakeVar. Adding an option here (and to
+# `make options`) is all that is needed.
+OPTIONS="
 lto:SIOYEK_ENABLE_LTO
 tests:SIOYEK_ENABLE_TESTS
 ccache:SIOYEK_ENABLE_CCACHE
@@ -24,52 +32,74 @@ sqlite-trim:SIOYEK_SQLITE_TRIM
 strict-warnings:SIOYEK_STRICT_NON_THIRD_PARTY_WARN
 werror-return-type:SIOYEK_WERROR_RETURN_TYPE
 allow-unverified-system-mupdf:SIOYEK_ALLOW_UNVERIFIED_SYSTEM_MUPDF
-"
-TRISTATE_OPTIONS="
 system-mupdf:SIOYEK_USE_SYSTEM_MUPDF
 system-sqlite:SIOYEK_USE_SYSTEM_SQLITE
-"
-VALUE_OPTIONS="
 install-layout:SIOYEK_INSTALL_LAYOUT
 mupdf-unembed-fonts:SIOYEK_MUPDF_UNEMBED_FONTS
 package-formats:SIOYEK_PACKAGE_FORMATS
 "
 
+# Normalize a value token (yes/on/true/1 -> ON, no/off/false/0 -> OFF).
+_normalize_value() {
+case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
+yes|on|true|1) echo ON ;;
+no|off|false|0) echo OFF ;;
+auto) echo AUTO ;;
+*) echo "$1" ;;
+esac
+}
+
 out=""
-for a in $ARGS; do
+for a in "$@"; do
+# Allow bare names by adding a default --enable/--with prefix heuristically:
+# "enable-lto" -> "--enable-lto", "disable-tests" -> "--disable-tests".
 case "$a" in
--*) ;;                      # already has a leading dash
-*) a="--$a" ;;              # convenience: enable-lto -> --enable-lto
+enable-*)  a="--$a" ;;
+disable-*) a="--$a" ;;
+with-*)    a="--$a" ;;
+without-*) a="--$a" ;;
 esac
 
 matched=0
 
-# --enable-X / --disable-X
-for pair in $BOOL_OPTIONS; do
-key=${pair%%:*}; var=${pair##*:}
-case "$a" in
---enable-"$key")  out="$out -D$var=ON";  matched=1 ;;
---disable-"$key") out="$out -D$var=OFF"; matched=1 ;;
+# Split "key" and optional "=VALUE".
+key=${a#--}
+val=""
+case "$key" in
+*=*) val=${key#*=}; key=${key%%=*} ;;
 esac
-done
 
-# --with-X / --without-X / --with-X=VALUE
-for pair in $TRISTATE_OPTIONS; do
-key=${pair%%:*}; var=${pair##*:}
-case "$a" in
---with-"$key")    out="$out -D$var=ON";  matched=1 ;;
---without-"$key") out="$out -D$var=OFF"; matched=1 ;;
---with-"$key"=*)  out="$out -D$var=${a#*=}"; matched=1 ;;
+# Strip the prefix to get the bare option name.
+name=""
+dir=""
+case "$key" in
+enable-*)  name=${key#enable-};  dir=enable ;;
+disable-*) name=${key#disable-}; dir=disable ;;
+with-*)    name=${key#with-};    dir=with ;;
+without-*) name=${key#without-}; dir=without ;;
+*) name="" ;;
 esac
-done
 
-# --with-X=VALUE
-for pair in $VALUE_OPTIONS; do
-key=${pair%%:*}; var=${pair##*:}
-case "$a" in
---with-"$key"=*) out="$out -D$var=${a#*=}"; matched=1 ;;
-esac
+if [ -n "$name" ]; then
+# find the CMake variable for this name
+var=""
+for pair in $OPTIONS; do
+k=${pair%%:*}; v=${pair##*:}
+[ "$k" = "$name" ] && { var=$v; break; }
 done
+if [ -n "$var" ]; then
+if [ -n "$val" ]; then
+# explicit value wins over the prefix direction
+out="$out -D$var=$(_normalize_value "$val")"
+else
+case "$dir" in
+enable|with)    out="$out -D$var=ON" ;;
+disable|without) out="$out -D$var=OFF" ;;
+esac
+fi
+matched=1
+fi
+fi
 
 # raw -D passthrough
 case "$a" in
@@ -78,7 +108,7 @@ esac
 
 if [ "$matched" = 0 ]; then
 echo "error: unrecognized build option '$a'" >&2
-echo "       run 'make options' to list supported --enable/--disable/--with flags" >&2
+echo "       run 'make options' for the list of supported options" >&2
 exit 2
 fi
 done

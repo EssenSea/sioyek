@@ -143,12 +143,18 @@ make                                   # default preset is now linux-portable
 
 | `./configure` flag | CMake variable |
 |---|---|
-| `--enable-X` / `--disable-X` | `-DSIOYEK_*=ON` / `=OFF` (booleans) |
-| `--with-X` / `--without-X` | `-DSIOYEK_*=ON` / `=OFF` (tri-state) |
-| `--with-X=VALUE` | `-DSIOYEK_*=VALUE` |
+| `--enable-X` / `--with-X` | `-DSIOYEK_*=ON` |
+| `--disable-X` / `--without-X` | `-DSIOYEK_*=OFF` |
+| `--enable-X=VALUE` / `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
 | `-D<var>=<value>` | raw CMake flag (passed through) |
 | `--preset=NAME` | default `PRESET` for `make` |
 | `--help`, `--wipe` | usage / reset |
+
+All four prefixes work for **every** option, matching autoconf conventions
+(`--with-X` == `--enable-X`, `--without-X` == `--disable-X`), so e.g.
+`--with-lto` and `--disable-system-mupdf` are both valid. `make options` prints
+the full table, which is generated from and shared with
+`cmake/parse-build-options.sh`.
 
 `./configure` and `make options` share the option table in
 `cmake/parse-build-options.sh`, so both stay in sync.

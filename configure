@@ -12,12 +12,12 @@
 #   ./configure --help
 #
 # Recognized options (see `make options` for the full table):
-#   --enable-X / --disable-X            -> -DSIOYEK_*=ON/OFF
-#   --with-X   / --without-X           -> -DSIOYEK_*=ON/OFF
-#   --with-X=VALUE                     -> -DSIOYEK_*=VALUE
+#   --enable-X / --with-X              -> -DSIOYEK_*=ON    (any prefix works)
+#   --disable-X / --without-X          -> -DSIOYEK_*=OFF
+#   --enable-X=VALUE / --with-X=VALUE  -> -DSIOYEK_*=VALUE  (yes/on/1 -> ON,
+#                                                            no/off/0 -> OFF)
 #   raw -D...                          -> passed through
 #   --preset=<name>                    -> default PRESET for make
-#   --enable-X=no|off / --disable-X=yes|on  -> also accepted
 #
 # Re-running ./configure replaces the recorded options; --wipe removes config.mk.
 # =============================================================================
@@ -34,11 +34,16 @@ Usage: ./configure [OPTIONS]
 Autoconf-style front-end for sioyek's CMake build. Options are recorded in
 config.mk and used by subsequent \`make\` invocations.
 
-Configuration options (translated to -DSIOYEK_* CMake variables):
-  --enable-X / --disable-X            boolean feature (see \`make options\`)
-  --with-X / --without-X              tri-state feature
-  --with-X=VALUE                      value option
+Configuration options (translated to -DSIOYEK_* CMake variables).
+Any of the four prefixes works for any option (autoconf convention:
+--with-X == --enable-X, --without-X == --disable-X):
+  --enable-X / --with-X               enable a feature (or =VALUE)
+  --disable-X / --without-X           disable a feature
+  --enable-X=VALUE                    set an explicit value (yes/on/1 -> ON,
+                                      no/off/0 -> OFF, else verbatim)
   -D<var>=<value>                     raw CMake flag (passed through)
+
+See all options with \`make options\`.
 
 Build selection:
   --preset=NAME                       default preset for \`make\` (e.g. linux-vendored)

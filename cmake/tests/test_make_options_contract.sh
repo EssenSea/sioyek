@@ -81,6 +81,36 @@ n="$(grep -o -- '-D' <<<"${out}" | wc -l)"
 [[ "${n}" -eq 3 ]] && ok "multiple options translated (3 -D flags)" \
     || bad "expected 3 -D flags, got ${n} (out: ${out})"
 
+# --- autoconf prefix interchangeability -------------------------------------
+out="$(run_parser --with-lto)"
+grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${out}" && ok "--with-lto == --enable-lto (booleans accept --with)" \
+    || bad "--with-<boolean> not accepted (got: ${out})"
+
+out="$(run_parser --without-strip-on-install)"
+grep -q -- '-DSIOYEK_STRIP_ON_INSTALL=OFF' <<<"${out}" && ok "--without-<boolean> == --disable-<boolean>" \
+    || bad "--without-<boolean> not accepted (got: ${out})"
+
+out="$(run_parser --enable-system-mupdf)"
+grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${out}" && ok "tri-state accepts --enable- prefix" \
+    || bad "tri-state --enable- not accepted (got: ${out})"
+
+out="$(run_parser --disable-system-sqlite)"
+grep -q -- '-DSIOYEK_USE_SYSTEM_SQLITE=OFF' <<<"${out}" && ok "tri-state accepts --disable- prefix" \
+    || bad "tri-state --disable- not accepted (got: ${out})"
+
+# --- explicit value overrides prefix direction (autoconf semantics) ----------
+out="$(run_parser --disable-lto=yes)"
+grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${out}" && ok "--disable-X=yes -> ON" \
+    || bad "--disable-X=yes not normalized (got: ${out})"
+
+out="$(run_parser --enable-lto=no)"
+grep -q -- '-DSIOYEK_ENABLE_LTO=OFF' <<<"${out}" && ok "--enable-X=no -> OFF" \
+    || bad "--enable-X=no not normalized (got: ${out})"
+
+out="$(run_parser --with-system-mupdf=auto)"
+grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=AUTO' <<<"${out}" && ok "value normalization: auto -> AUTO" \
+    || bad "auto not normalized (got: ${out})"
+
 # --- unknown option fails ---------------------------------------------------
 if "${PARSER}" --enable-frobnicate >/dev/null 2>&1; then
     bad "unknown option --enable-frobnicate should fail"
