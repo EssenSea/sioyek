@@ -96,6 +96,22 @@ else
     bad "cmake/list-build-presets.cmake is missing"
 fi
 
+# 7b) Windows presets must NOT pin a specific Visual Studio generator version.
+#     The runner image moved past VS 2022, and "Visual Studio 17 2022" then
+#     fails with "could not find any instance of Visual Studio". Leaving the
+#     generator unset lets CMake pick the newest installed VS on Windows.
+if python3 -c "
+import json,sys
+d=json.load(open('${REPO_ROOT}/CMakePresets.json'))
+bad=[p['name'] for p in d['configurePresets']
+     if 'windows' in p['name'] and 'generator' in p]
+sys.exit(1 if bad else 0)
+"; then
+    ok "windows presets do not pin a Visual Studio generator version"
+else
+    bad "windows presets pin a VS generator version (breaks on runner upgrade)"
+fi
+
 # 8) The Makefile must no longer depend on sed for preset discovery.
 if grep -q "list-build-presets.cmake" "${REPO_ROOT}/Makefile"; then
     ok "Makefile uses the portable preset lister"

@@ -32,6 +32,13 @@ name: CMake Build & Contract Tests
 #     configure time with an actionable message; the job asserts that message.
 #     A real Windows binary from the CMake path still needs a system/prebuilt
 #     mupdf (SIOYEK_USE_SYSTEM_MUPDF=ON or the legacy qmake path).
+#
+#     The windows presets intentionally do NOT pin a Visual Studio generator
+#     version. Pinning "Visual Studio 17 2022" broke as soon as the runner image
+#     moved to VS 2025 ("Visual Studio 18 2026"): CMake then reports "could not
+#     find any instance of Visual Studio". Without a generator, CMake selects the
+#     newest VS installed on the host. The job also discovers the generator
+#     dynamically so it validates the diagnostic, not a specific VS version.
 # ---------------------------------------------------------------------------
 
 on:
@@ -216,30 +223,55 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up MSVC (Visual Studio 2022 x64)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Toolchain versions
-        run: cmake --version
+      - name: Toolchain versions and VS discovery
+        shell: pwsh
+        run: |
+          cmake --version
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            Write-Host "--- vswhere (latest with VC tools) ---"
+            & $vswhere -latest -products * `
+              -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+              -property installationPath
+            Write-Host "--- vswhere (all products) ---"
+            & $vswhere -products * -property installationPath
+          } else {
+            Write-Host "vswhere.exe not found"
+          }
+          Write-Host "--- Visual Studio generators CMake recognizes ---"
+          cmake --help | Select-String -Pattern "Visual Studio"
 
       - name: The Windows presets are recognized by CMake
+        shell: pwsh
         run: |
           cmake --list-presets=build
-          cmake --list-presets=build | Select-String -Pattern "windows-release","windows-debug"
+          $p = cmake --list-presets=build | Select-String -Pattern "windows-release","windows-debug"
+          if (-not $p) { Write-Error "windows build presets not listed"; exit 1 }
 
       # The documented contract: vendored mupdf + MSVC fails fast at configure
       # time with a message that names the Windows mupdf build path. We assert
       # the *message* (not just a non-zero exit) so a future prebuilt-mupdf
       # change is noticed explicitly.
+      #
+      # The preset does not pin a VS version, so CMake selects the newest VS
+      # installed on the runner. The SioyekMupdf.cmake guard keys on
+      # WIN32 AND MSVC and is generator independent.
       - name: Vendored mupdf under MSVC fails with a clear diagnostic
+        shell: pwsh
         run: |
           $log = Join-Path $PWD "vendored-msvc.log"
           cmake --preset windows-release -DSIOYEK_USE_SYSTEM_MUPDF=OFF *>&1 |
             Tee-Object -FilePath $log
           $code = $LASTEXITCODE
           $text = Get-Content $log -Raw
+
+          if ($text -match "could not find any instance of Visual Studio") {
+            Write-Error ("Visual Studio generator discovery failed on this runner " +
+              "(no VS at all, or CMake cannot see it); this is an environment " +
+              "problem, not the expected diagnostic.")
+            Get-Content $log | Select-Object -Last 40
+            exit 1
+          }
           if ($code -eq 0) {
             Write-Error "vendored mupdf + MSVC unexpectedly configured successfully"
             exit 1

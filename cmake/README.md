@@ -554,8 +554,13 @@ Run `cmake --list-presets` to see all. Summary:
 
 #### Windows support status (be precise)
 
-The `windows-*` presets exist and are recognized by CMake, but the **vendored
-mupdf route cannot be built under MSVC**: mupdf's own Windows build is a Visual
+The `windows-*` presets exist and are recognized by CMake. They deliberately
+do **not** pin a Visual Studio generator version: CMake then selects the newest
+installed VS on the host. (A pinned `"Visual Studio 17 2022"` broke as soon as
+CI runner images moved to VS 2025, where CMake reports "could not find any
+instance of Visual Studio".)
+
+The **vendored mupdf route cannot be built under MSVC**: mupdf's own Windows build is a Visual
 Studio solution (`mupdf/platform/win32/mupdf.sln`), whereas `SioyekMupdf.cmake`
 drives mupdf's POSIX Makefile. `SioyekMupdf.cmake` therefore fails fast at
 configure time with an actionable message for the `WIN32 AND MSVC` + vendored
@@ -570,8 +575,10 @@ To produce a Windows binary today either:
   `mupdf.sln` directly.
 
 `windows-cmake-validate` in `.github/workflows/cmake_build.yml` runs on
-`windows-latest` and asserts this behaviour (plus that CMake recognizes the
-presets), so the Windows CMake path has at least one real CI signal.
+`windows-latest`, discovers the available Visual Studio generator dynamically
+(to survive runner-image VS upgrades) and asserts this behaviour (plus that
+CMake recognizes the presets), so the Windows CMake path has at least one real
+CI signal.
 
 ---
 
