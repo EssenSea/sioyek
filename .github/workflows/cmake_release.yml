@@ -171,7 +171,7 @@ jobs:
           # it matches, the producer receives SIGPIPE, and the pipeline reports
           # failure even though the assertion succeeded. That is exactly how an
           # earlier revision failed here (dpkg-deb: "tar: stdout: write error").
-          tar tzf build/linux-release/*.tar.gz > tgz-contents.txt
+          tar tzf build/linux-release/*.tar.gz > tgz-contents.txt   # entries carry the sioyek-<ver>-Linux/ prefix
           dpkg-deb -c build/linux-release/*.deb > deb-contents.txt
 
           rc=0
@@ -195,8 +195,22 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/verify && mkdir -p /tmp/verify
           tar xzf build/linux-release/*.tar.gz -C /tmp/verify
-          BIN=/tmp/verify/usr/bin/sioyek
-          test -x "$BIN"
+
+          # The CPack archive nests everything under a top-level directory
+          # named after the package+version ("sioyek-2.0.0-Linux/"), so the
+          # binary is NOT at <extract>/usr/bin/sioyek. Locate it instead of
+          # hard-coding the layout, and fail loudly with the actual tree when
+          # it is absent -- an earlier revision assumed the un-nested path and
+          # died silently on "test -x", which reads as a mysterious exit-1 with
+          # no output at all.
+          BIN="$(find /tmp/verify -type f -name sioyek -path "*/usr/bin/*" | head -1)"
+          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+            echo "::error::no executable usr/bin/sioyek inside the archive"
+            echo "--- extracted tree ---"
+            find /tmp/verify -maxdepth 4 | head -40
+            exit 1
+          fi
+          echo "found packaged binary: $BIN"
 
           # Capture the listing BEFORE searching it. Piping ldd straight into
           # "grep -q" is wrong under "set -o pipefail": grep exits on the first
