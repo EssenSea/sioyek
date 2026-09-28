@@ -72,6 +72,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config
 
+      # Qt IS required even for the fast contract job. CMakeLists.txt calls
+      # find_package(Qt6 6.5 REQUIRED ...) unconditionally, so a plain
+      # `cmake -S . -B ...` cannot configure without it -- the configure step
+      # fails before any test runs. Running the suites directly (run_all.sh)
+      # does NOT need Qt, because those are self-contained shell scripts, but
+      # the CTest path does, and this job exercises both.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: "6.7.2"
+          modules: "all"
+          cache: true
+
       - name: Run the contract suite directly
         env:
           SIOYEK_TEST_VERBOSE: "1"
