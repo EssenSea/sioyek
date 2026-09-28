@@ -14,6 +14,8 @@
 #   - unknown options fail (exit != 0) with a helpful message
 #   - the Makefile actually injects the flags into the configure command
 #   - `make options` lists every mapped key
+#   - per-preset shortcuts (`make <preset>`, `make install-<preset>`, ...) exist,
+#     resolve to the right preset, and compose with the friendly options
 # =============================================================================
 set -u
 
@@ -122,6 +124,79 @@ if command -v make >/dev/null 2>&1; then
     fi
 else
     ok "make not available; skipping Makefile integration checks"
+fi
+
+# ---------------------------------------------------------------------------
+# Per-preset shortcut targets: `make <preset>` and friends must drive the right
+# preset and compose with the friendly options.
+# ---------------------------------------------------------------------------
+echo "--- per-preset shortcuts ---"
+
+if command -v make >/dev/null 2>&1 && [ -f "${REPO_ROOT}/CMakePresets.json" ]; then
+    # Collect the visible configure presets straight from cmake.
+    presets="$(cd "${REPO_ROOT}" && cmake --list-presets 2>/dev/null \
+        | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p')"
+    n=0
+    for p in ${presets}; do n=$((n+1)); done
+    if [[ ${n} -gt 0 ]]; then
+        ok "discovered ${n} configure preset(s) for shortcut checks"
+    else
+        bad "no configure presets discovered"
+    fi
+
+    # `make <preset>` must configure+build the SAME preset.
+    bad_short=0
+    for p in ${presets}; do
+        cmd="$(cd "${REPO_ROOT}" && make -n "${p}" 2>/dev/null)"
+        if grep -qE -- "--preset ${p}( |$)" <<<"${cmd}" \
+           && grep -qE -- "--build --preset ${p}( |$)" <<<"${cmd}"; then
+            :
+        else
+            bad_short=$((bad_short+1))
+        fi
+    done
+    [[ ${bad_short} -eq 0 ]] && ok "make <preset> drives the matching preset for every preset" \
+        || bad "make <preset> mismatched for ${bad_short} preset(s)"
+
+    # `make install-<preset>` must build and install that preset's build dir.
+    cmd="$(cd "${REPO_ROOT}" && make -n install-linux-release 2>/dev/null)"
+    if grep -qE -- "--preset linux-release( |$)" <<<"${cmd}" \
+       && grep -qE -- "--build --preset linux-release" <<<"${cmd}" \
+       && grep -qE -- "--install build/linux-release" <<<"${cmd}"; then
+        ok "make install-<preset> builds and installs the matching preset"
+    else
+        bad "make install-<preset> wiring is wrong (got: ${cmd})"
+    fi
+
+    # `make test-<preset>` must run ctest against the preset's build dir.
+    cmd="$(cd "${REPO_ROOT}" && make -n test-linux-debug 2>/dev/null)"
+    if grep -qE -- "--build --preset linux-debug" <<<"${cmd}" \
+       && grep -qE -- "ctest --test-dir build/linux-debug" <<<"${cmd}"; then
+        ok "make test-<preset> runs ctest in the matching build dir"
+    else
+        bad "make test-<preset> wiring is wrong (got: ${cmd})"
+    fi
+
+    # Composition: shortcut + friendly option must both reach configure.
+    cmd="$(cd "${REPO_ROOT}" && make -n linux-release \
+            EXTRA_CMAKE_ARGS="--disable-lto --with-system-mupdf" 2>/dev/null)"
+    if grep -qE -- "--preset linux-release" <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_ENABLE_LTO=OFF' <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${cmd}"; then
+        ok "shortcut composes with friendly options (--preset + -D both present)"
+    else
+        bad "shortcut/option composition failed (got: ${cmd})"
+    fi
+
+    # A preset shortcut must NOT shadow the generic targets.
+    for t in build install test package; do
+        if (cd "${REPO_ROOT}" && make -n "${t}" >/dev/null 2>&1); then :; else
+            bad "generic target '${t}' broken by per-preset rules"
+        fi
+    done
+    ok "generic targets (build/install/test/package) still work"
+else
+    ok "make/CMakePresets.json unavailable; skipping shortcut checks"
 fi
 
 echo

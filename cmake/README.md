@@ -94,17 +94,38 @@ A thin, Makefile-conventional wrapper is provided at the repository root; it
 just drives the CMake presets:
 
 ```sh
-make                        # build (default PRESET=linux-release)
-make PRESET=linux-vendored  # build a specific preset
-make test                   # build + run CTest
+make                          # build (default PRESET=linux-release)
+make PRESET=linux-vendored    # build a specific preset
+make linux-vendored           # ...or the shortcut: `make <preset>`
+make install-linux-portable DESTDIR=/tmp/stage   # shortcut: build + staged install
+make test-linux-debug         # shortcut: build + ctest
+make test                     # build + run CTest
 make install DESTDIR=/tmp/stage
-make distclean              # remove build/ and all generated artifacts
-make clean-build            # remove the whole build/ tree (all presets)
-make help                   # list all targets
+make distclean                # remove build/ and all generated artifacts
+make clean-build              # remove the whole build/ tree (all presets)
+make help                     # list all targets
+```
+
+Every configure preset gets a first-class shortcut target, derived from
+`cmake --list-presets` so it stays in sync automatically:
+
+| Shortcut | Equivalent |
+|---|---|
+| `make <preset>` | `make build PRESET=<preset>` |
+| `make install-<preset>` | `make install PRESET=<preset>` |
+| `make test-<preset>` | `make test PRESET=<preset>` |
+| `make package-<preset>` | `make package PRESET=<preset>` |
+| `make clean-<preset>` | `make clean PRESET=<preset>` |
+
+Shortcuts compose with the friendly options and the usual variables, e.g.
+
+```sh
+make linux-release EXTRA_CMAKE_ARGS="--disable-lto"
+make install-linux-portable DESTDIR=/tmp/stage EXTRA_CMAKE_ARGS="--enable-strip-on-install"
 ```
 
 A git-ignored `local.mk` (see `contrib/local.mk.example`) can override `PRESET`,
-`CMAKE_EXTRA_FLAGS`, `PREFIX`, `DESTDIR`, `JOBS`, ...
+`CMAKE_EXTRA_FLAGS`, `EXTRA_CMAKE_ARGS`, `PREFIX`, `DESTDIR`, `JOBS`, ...
 
 ### Direct CMake
 

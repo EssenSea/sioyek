@@ -46,6 +46,11 @@ PRESET ?= linux-release
 # Build dir (matches the preset binaryDir; see CMakePresets.json).
 BUILD_DIR ?= build/$(PRESET)
 
+# Discovered configure presets, for the per-preset shortcut targets below
+# (e.g. `make linux-vendored`, `make install-linux-vendored`). Derived from CMake
+# so it stays in sync with CMakePresets.json; empty if cmake is unavailable.
+SIOYEK_PRESETS := $(shell $(CMAKE) --list-presets 2>/dev/null | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p')
+
 # Extra CMake configure flags, e.g.
 #   make CMAKE_EXTRA_FLAGS='-DSIOYEK_MUPDF_UNEMBED_FONTS=CJK'
 CMAKE_EXTRA_FLAGS ?=
@@ -81,6 +86,36 @@ build: configure
 
 configure:
 	$(CMAKE) --preset $(PRESET) $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
+
+# ---- Per-preset shortcuts ---------------------------------------------------
+# `make <preset>` builds with that preset:
+#   make linux-vendored                    # instead of `make build PRESET=linux-vendored`
+#   make linux-release EXTRA_CMAKE_ARGS="--disable-lto"
+#   make install-linux-portable DESTDIR=/tmp/stage
+#   make test-linux-debug
+.PHONY: $(SIOYEK_PRESETS)
+$(SIOYEK_PRESETS):
+	$(CMAKE) --preset $@ $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
+	$(CMAKE) --build --preset $@ -j$(JOBS)
+
+.PHONY: install-% test-% package-% clean-%
+install-%:
+	$(CMAKE) --preset $* $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
+	$(CMAKE) --build --preset $* -j$(JOBS)
+	DESTDIR='$(DESTDIR)' $(CMAKE) --install build/$* $(if $(PREFIX),--prefix $(PREFIX),)
+
+test-%:
+	$(CMAKE) --preset $* $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
+	$(CMAKE) --build --preset $* -j$(JOBS)
+	ctest --test-dir build/$* --output-on-failure
+
+package-%:
+	$(CMAKE) --preset $* $(SIOYEK_OPTION_FLAGS) $(CMAKE_EXTRA_FLAGS)
+	$(CMAKE) --build --preset $* -j$(JOBS)
+	cd build/$* && cpack
+
+clean-%:
+	@if [ -d "build/$*" ]; then $(CMAKE) --build build/$* --target clean; fi
 
 # ---- Test -------------------------------------------------------------------
 test: configure
@@ -229,6 +264,10 @@ list-presets:
 help:
 	@echo 'sioyek Make targets:'
 	@echo '  make [PRESET=...]         build (default PRESET=linux-release)'
+	@echo '  make <preset>             build with a preset, e.g. make linux-vendored'
+	@echo '  make install-<preset>     build + staged install, e.g. make install-linux-portable'
+	@echo '  make test-<preset>        build + ctest, e.g. make test-linux-debug'
+	@echo '  make package-<preset>     build + cpack, e.g. make package-linux-release'
 	@echo '  make test                 build and run CTest'
 	@echo '  make install DESTDIR=...  build and staged install'
 	@echo '  make package              build and run CPack'
