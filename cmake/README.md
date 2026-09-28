@@ -26,7 +26,11 @@ cmake/
 ├── SioyekInstall.cmake       authoritative install manifest
 ├── SioyekPackaging.cmake     CPack configuration
 ├── SioyekTesting.cmake       CTest registration
+├── SioyekUninstall.cmake     uninstall target (replays install_manifest.txt)
 ├── SioyekWarnings.cmake      warning policy + third-party isolation
+├── list-build-presets.cmake  preset discovery/query (no external tools)
+├── options.mk               `make options` help (rendered from the shared table)
+├── parse-build-options.sh    the option table + validation (single source of truth)
 └── tests/                    contract regression tests (bash)
 ```
 
@@ -52,9 +56,13 @@ CMake is the source of truth for the build. The pieces that matter:
   target may ever delete it** (see §5).
   The per-preset shortcut targets (`make <preset>`, `make install-<preset>`, ...)
   are discovered by `cmake/list-build-presets.cmake`, a small CMake script that
-  parses `CMakePresets.json`. This replaced a `cmake --list-presets | sed`
-  pipeline, removing the `sed` dependency (and making the discovery work under
-  the Makefile's Windows branch).
+  parses `CMakePresets.json`. This replaced a `cmake --list-presets | grep`
+  pipeline in the Makefile, so the discovery needs no external tools and works
+  under the Makefile's Windows branch. (Note: `make options` still formats its
+  help with `sed`/`awk` -- a display-only path; the option *table* has a single
+  source of truth in `cmake/parse-build-options.sh`.)
+  The same script answers `--has-package-preset`, which is what lets
+  `make package` use `cpack --preset` when the configure preset has one.
   The Makefile drives POSIX-sh recipes; on Windows run it from a POSIX
   environment that provides `sh` and `make` (Git for Windows "Git Bash",
   MSYS2, or Cygwin). It fails fast with an actionable message if no POSIX shell
@@ -113,6 +121,7 @@ make install-linux-portable DESTDIR=/tmp/stage   # shortcut: build + staged inst
 make test-linux-debug         # shortcut: build + ctest
 make test                     # build + run CTest
 make install DESTDIR=/tmp/stage
+make uninstall                # remove what a previous install wrote (see 4b)
 make distclean                # remove build/ and all generated artifacts
 make clean-build              # remove the whole build/ tree (all presets)
 make help                     # list all targets
@@ -123,7 +132,8 @@ target) reuses them. Re-run `./configure` to change them; `./configure --wipe`
 resets to the defaults.
 
 Every configure preset gets a first-class shortcut target, derived from
-`cmake --list-presets` so it stays in sync automatically:
+`CMakePresets.json` (via `cmake/list-build-presets.cmake`) so it stays in sync
+automatically:
 
 | Shortcut | Equivalent |
 |---|---|
@@ -212,18 +222,26 @@ ctest --test-dir build --output-on-failure
 
 ## 2b. The Makefile and `./configure` are wrappers over CMake
 
-**CMake is the source of truth.** Everything the Makefile and `./configure` do
-can be done directly with CMake; they only add convenience (short target names,
-autoconf-style option spellings, option recording). In particular there is **no
-build logic outside CMake** — the Makefile forwards to `cmake`/`ctest`/`cpack`,
-and `./configure` merely records `-D` flags in `config.mk`.
+**CMake is the source of truth for the CMake path.** Everything the Makefile and
+`./configure` do on that path can be done directly with CMake; they only add
+convenience (short target names, autoconf-style option spellings, option
+recording). The Makefile forwards to `cmake`/`ctest`/`cpack`, and `./configure`
+records `-D` flags in `config.mk`.
+
+Scope note, stated plainly: this document describes the **CMake build system**
+(the presets, the modules under `cmake/`, and the Makefile / `./configure`
+wrappers). The repository also contains a **legacy qmake path**
+(`pdf_viewer_build_config.pro` plus the `build_*.sh` / `build_windows.bat` /
+`linuxdeploy_build_and_release.sh` scripts). That path is **not** covered by
+this document and is **not** exercised by the contract test suite; it is a
+genuinely separate source of build logic, out of scope here rather than unified.
 
 | Convenience | Equivalent with pure CMake |
 |---|---|
 | `make <preset>` | `cmake --preset <preset> && cmake --build --preset <preset>` |
 | `make install` | `cmake --install build/<preset>` (with `DESTDIR`) |
 | `make test` | `cmake --build --preset <preset> && ctest --test-dir build/<preset>` |
-| `make package` | `cd build/<preset> && cpack` |
+| `make package` | `cpack --preset <preset>` (falls back to `cd build/<preset> && cpack` when the configure preset has no package preset) |
 | `make appimage` | `cmake --build --preset linux-appimage --target appimage` |
 | `make clean` / `distclean` / `clean-*` | `cmake --build build/<preset> --target clean*` |
 | `./configure --enable-X` | `cmake --preset <p> -DSIOYEK_*=ON` |
@@ -582,6 +600,72 @@ CI signal.
 
 ---
 
+## 4b. Uninstall
+
+`cmake --install` records every file it wrote in
+`<build-dir>/install_manifest.txt`. Both entry points expose an **uninstall**
+that replays that manifest:
+
+    make uninstall                          # PRESET=... selects the build dir
+    cmake --build build/linux-release --target uninstall
+
+Semantics:
+
+* `DESTDIR` is honoured exactly as for install, so uninstalling a staged tree
+  removes the staged copies and can never touch the real system prefix;
+* only files that were actually installed and still exist are removed (already
+  absent files are counted and reported, not treated as errors);
+* directories created by the install are pruned **only when empty**, deepest
+  first, so a shared `/usr/share/applications` that still holds another
+  package file is left alone;
+* a **missing manifest is a hard error**, never a silent success -- otherwise a
+  stale installation would look removed. The consumed manifest is deleted at the
+  end so a second run reports the truth instead of pretending to work.
+
+## 4c. Why option values are validated (trust boundary)
+
+`./configure` records values into `config.mk`, and the Makefile pulls that file
+in with `include`. **GNU make expands every line it reads textually, while
+parsing it** -- before any target is considered. A recorded value is therefore
+re-interpreted by make, which creates two distinct hazards:
+
+1. **Command execution.** A shell-command substitution in a makefile is expanded
+   at parse time, so a value such as `--enable-lto` given a shell-command payload
+   would run an arbitrary command on the next `make`. The same applies to make
+   variable references and backticks.
+2. **Silent value corruption.** A bare dollar sign is read by make as a variable
+   reference, so an install directory written as a variable reference would
+   arrive at CMake with its head eaten.
+
+`cmake/parse-build-options.sh` closes both by rejecting the dangerous character
+set outright (whitespace, quotes, dollar, backtick, backslash, and the shell
+metacharacters `; | & < > ( ) { } * ? [ ] ! ~ #`) and by escaping the dollar sign
+as `$` on output as defence in depth. The accepted set is deliberately narrow
+and still covers every value the build system uses: `ON`/`OFF`/`AUTO`, the
+enumerated domains, `standard`/`portable`, and install directories such as
+`/usr` or `lib64`.
+
+Because a literal semicolon cannot survive the round-trip, the one list-valued
+option uses **commas** on the command line and is translated to CMake own
+semicolon-separated list syntax:
+
+    ./configure --enable-package-formats=DEB,RPM,TGZ
+    # -> -DSIOYEK_PACKAGE_FORMATS=DEB;RPM;TGZ
+
+Membership is checked against a whitelist, so an unknown generator name fails at
+configure time with the allowed set.
+
+Two further consistency rules:
+
+* an explicit empty value (`--enable-lto=`, `--prefix=`) is an error for **both**
+  feature and directory options -- a feature option used to degrade silently to
+  `ON`;
+* every option with a bounded domain is listed in the ENUMS table, so a typo
+  fails fast instead of reaching CMake, where an unrecognised token is often
+  treated as false-y and would silently *disable* the feature the user meant to
+  enable.
+
+This contract is enforced by `test_config_security_contract.sh` (59 assertions).
 ## 5. Clean-up
 
 There are two complementary clean mechanisms: the **Makefile** (synchronous,
@@ -696,9 +780,24 @@ not require submodules or a full build.
 | `test_packaging_contract.sh` | CPack config generated; name/version/contact; `CPACK_STRIP_FILES` driven by `SIOYEK_PACKAGE_STRIP` |
 | `test_warnings_contract.sh` | tri-state strict warnings (`AUTO` on Debug) and `-Werror=return-type`; third-party downgrade to `-w`; clang-only flag not applied under GCC |
 | `test_presets.sh` | preset presence/validity; every preset referenced by a CI workflow resolves; `clean-deps` is defined |
+| `test_make_options_contract.sh` | the friendly option table end to end: prefix interchangeability, value normalisation, `./configure` -> `config.mk` -> Makefile injection, per-preset shortcuts |
+| `test_config_security_contract.sh` | the configuration trust boundary: command substitution, backticks, a bare dollar sign, shell metacharacters and empty values are all rejected; bounded option domains are enforced; `config.mk` never receives a character make could expand |
+| `test_dependencies_resolution_contract.sh` | the three dependency-resolution routes: legacy `<Name>_FOUND` variables (both case spellings), version back-fill for imported targets, and per-dependency pkg-config target isolation |
+| `test_buildsystem_integrity_contract.sh` | `make lint` is plannable; CTest and `run_all.sh` discover suites; every suite enables `pipefail`; uninstall exists and refuses to run without a manifest; `make package` consults package presets |
 
-`run_all.sh` runs all suites (currently **8 suites / 88 assertions**).
-`SIOYEK_TEST_VERBOSE=1` prints diagnostics on failures.
+`run_all.sh` runs **every** `cmake/tests/test_*.sh` suite it finds; the list is
+discovered, never hand-written. As of this revision that is **12 suites / 262
+assertions**. `SIOYEK_TEST_VERBOSE=1` prints diagnostics on failures.
+
+#### Why the suite list is discovered
+
+The list used to be written out twice -- in `cmake/SioyekTesting.cmake` and in
+`cmake/tests/run_all.sh` -- and the copies drifted: CTest registered **8** suites
+while `run_all.sh` ran **9**, so `test_make_options_contract.sh` (the largest
+suite) never ran under `ctest`, which is exactly what CI invokes. Both entry
+points now glob `cmake/tests/test_*.sh`, so adding a file registers it
+everywhere and a suite cannot silently disappear; a missing suite produces a
+visible warning rather than a silent skip.
 
 Coverage map (facility module → suite):
 
@@ -712,8 +811,10 @@ Coverage map (facility module → suite):
 | `SioyekPackaging.cmake` | `test_packaging_contract.sh` |
 | `SioyekWarnings.cmake` | `test_warnings_contract.sh` |
 | `CMakePresets.json` | `test_presets.sh` |
-| `SioyekDependencies.cmake` | exercised via the mupdf/sqlite suites |
-| `SioyekTesting.cmake` | exercised by running CTest itself |
+| `SioyekDependencies.cmake` | `test_dependencies_resolution_contract.sh` (plus the mupdf/sqlite suites) |
+| `SioyekTesting.cmake` | `test_buildsystem_integrity_contract.sh` + running CTest itself |
+| `Makefile` / `configure` / `parse-build-options.sh` | `test_make_options_contract.sh`, `test_config_security_contract.sh`, `test_buildsystem_integrity_contract.sh` |
+| `SioyekUninstall.cmake` | `test_buildsystem_integrity_contract.sh` (no-manifest refusal) |
 
 ---
 
@@ -792,7 +893,7 @@ make test PRESET=linux-vendored
 ### Verified on this host (Fedora-like, GCC 15, Qt 6.11, system mupdf 1.28.2)
 * [x] Configure with both source routes (system + vendored).
 * [x] **Real compile + link** using the **system** mupdf route.
-* [x] `ctest` runs all 8 contract suites (76 assertions) — pass.
+* [x] `ctest` runs all 12 contract suites (262 assertions) — pass.
 * [x] Staged install layout (standard).
 * [x] Strip-on-install and CPack strip produce `stripped` binaries.
 * [x] `-O2` + size optimizations reduce the stripped binary (~0.5 MB here).
