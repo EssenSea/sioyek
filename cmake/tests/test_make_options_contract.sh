@@ -153,6 +153,21 @@ grep -q -- "--prefix=" <<<"${conf_help}" && grep -q -- "--sysconfdir=" <<<"${con
     && ok "./configure --help lists installation-directory options" \
     || bad "./configure --help missing dir options"
 
+# --- ./configure must be POSIX-sh portable (CI runs it with dash) -----------
+# Guard against bash-isms that break /bin/sh = dash on Debian/Ubuntu CI.
+if [ -f "${REPO_ROOT}/configure" ]; then
+    if grep -qE '<\(|\bdeclare\b|\blocal\b|\[\[' "${REPO_ROOT}/configure"; then
+        bad "./configure uses non-POSIX shell constructs (e.g. process substitution / local / [[)"
+    else
+        ok "./configure is POSIX-sh portable"
+    fi
+    if grep -qE '<\(|\bdeclare\b|\blocal\b|\[\[' "${PARSER}"; then
+        bad "parse-build-options.sh uses non-POSIX shell constructs"
+    else
+        ok "parse-build-options.sh is POSIX-sh portable"
+    fi
+fi
+
 # --- unknown option fails ---------------------------------------------------
 if "${PARSER}" --enable-frobnicate >/dev/null 2>&1; then
     bad "unknown option --enable-frobnicate should fail"
