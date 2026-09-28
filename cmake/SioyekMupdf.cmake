@@ -240,6 +240,35 @@ else()
     endif()
 
     if(_sioyek_mupdf_src_ok)
+        # -------------------------------------------------------------------
+        # Windows / MSVC: the vendored route is not buildable from CMake.
+        #
+        # mupdf ships its own POSIX GNU Makefile (Makefile/Makerules), which
+        # invokes a GCC-style toolchain. Under MSVC there is no such toolchain
+        # and mupdf's own Windows build uses the Visual Studio solution in
+        # mupdf/platform/win32/mupdf.sln instead. CMake cannot drive that via
+        # the GNU make path below, so fail fast with an actionable message
+        # rather than letting `make` fail later with confusing errors.
+        #
+        # Use a prebuilt/system mupdf on Windows:
+        #   -DSIOYEK_USE_SYSTEM_MUPDF=ON   (requires a discoverable mupdf)
+        # or provide the mupdf libraries manually and set
+        #   SIOYEK_USE_SYSTEM_MUPDF=ON.
+        # -------------------------------------------------------------------
+        if(WIN32 AND MSVC)
+            message(FATAL_ERROR
+                "sioyek: the vendored mupdf cannot be built with MSVC.\n"
+                "mupdf's own build for Windows is a Visual Studio solution "
+                "(mupdf/platform/win32/mupdf.sln), which this CMake build cannot "
+                "drive through its POSIX Makefile.\n"
+                "On Windows, use a prebuilt/system mupdf instead:\n"
+                "  * install/build mupdf first, then configure with "
+                "-DSIOYEK_USE_SYSTEM_MUPDF=ON and make it discoverable via "
+                "CMAKE_PREFIX_PATH or a pkg-config file, or\n"
+                "  * follow the legacy qmake release path "
+                "(build_windows.bat), which builds mupdf.sln directly.")
+        endif()
+
         # mupdf ships its own GNU Make build system, which uses make-variable
         # syntax (e.g. "libs OUT=... HAVE_GLUT=no"). This is NOT compatible with
         # CMAKE_MAKE_PROGRAM when that is Ninja (ninja has different options and
