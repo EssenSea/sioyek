@@ -277,7 +277,7 @@ jobs:
           set -euo pipefail
           # "output-file" semantics differ between sbom-action releases, so find
           # the document instead of assuming one exact path.
-          SBOM=$(find . -maxdepth 3 -name "*.spdx.json" -type f | head -1)"
+          SBOM="$(find . -maxdepth 3 -name "*.spdx.json" -type f | head -1)"
           if [ -z "$SBOM" ]; then
             echo "::warning::no .spdx.json was produced; the release proceeds without an SBOM"
             find . -maxdepth 3 -name "*sbom*" | head -20
@@ -440,7 +440,22 @@ jobs:
           find dist -type f | sort
           # The release must never publish nothing. SBOM absence is tolerated
           # (warned about in the build job), but a missing package is not.
-          if ! find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.zip' \) | grep -q .; then
+          # Match with a shell glob rather than "find ... \( -name A -o ...".
+          # The escaped parentheses are fragile inside a YAML block scalar: an
+          # earlier revision shipped a bare "(" and the step died with
+          # "syntax error near unexpected token `(`". A case match is also
+          # easier to read than a find expression.
+          found=0
+          for f in dist/*/*; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.deb|*.rpm|*.tar.gz|*.zip)
+                echo "  package: $f"
+                found=1
+                ;;
+            esac
+          done
+          if [ "$found" -eq 0 ]; then
             echo "::error::no packages were downloaded; refusing to publish an empty release"
             exit 1
           fi
