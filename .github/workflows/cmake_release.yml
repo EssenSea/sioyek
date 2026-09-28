@@ -1,0 +1,311 @@
+name: CMake Release
+
+# =============================================================================
+# CMake-based release pipeline.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The repository already ships legacy release workflows
+# (build_and_release.yml, preview_release.yml) which drive the *qmake* path via
+# build_linux.sh / build_mac.sh / build_windows.bat /
+# linuxdeploy_build_and_release.sh. Those files are deliberately left untouched:
+# they still produce the historical release artifacts, and replacing them is a
+# separate migration decision.
+#
+# This workflow is ADDITIVE. It releases the SAME project through the **CMake
+# build system** -- the presets, the install contract and the CPack configuration
+# under cmake/ -- so the modern path is actually exercised end to end instead of
+# merely being configured. Until now nothing published a CMake-built artifact,
+# which is exactly how install/packaging defects stayed invisible.
+#
+# It also runs the full contract test suite, which the legacy release workflows
+# never did.
+#
+# TRIGGERS
+#   push tag v*       -> verify + build + package + publish a GitHub Release
+#   pull_request      -> verify + build + package (artifacts uploaded, NO release)
+#   workflow_dispatch -> same as a tag, without needing to tag
+#
+# DELIBERATE DIFFERENCES FROM THE LEGACY WORKFLOWS
+#   * every action is pinned to a full commit SHA (the legacy workflows use
+#     mutable major tags, which is a supply-chain risk on a release path);
+#   * `permissions:` is declared and minimal -- read-only by default, with
+#     `contents: write` granted only to the single publishing job;
+#   * failures are never swallowed: no `|| true` on any verification step;
+#   * the produced packages are VERIFIED (layout, contents, `ldd`) before they
+#     are published, rather than being zipped and uploaded unchecked.
+# =============================================================================
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default. The publishing job opts into contents:write.
+permissions:
+  contents: read
+
+concurrency:
+  group: cmake-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.7.2"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Contract tests. Fast, needs no submodules and no full build, so it gives a
+  #    signal in seconds and gates everything downstream.
+  # ---------------------------------------------------------------------------
+  contract-tests:
+    name: Contract tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config
+
+      - name: Run the contract suite directly
+        env:
+          SIOYEK_TEST_VERBOSE: "1"
+        run: bash ./cmake/tests/run_all.sh
+
+      - name: Configure and run the suite through CTest
+        run: |
+          cmake -S . -B build/contract \
+            -DSIOYEK_USE_SYSTEM_MUPDF=OFF \
+            -DSIOYEK_ENABLE_TESTS=ON
+          ctest --test-dir build/contract --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # 2. Real release build + package through the CMake install/CPack contract.
+  # ---------------------------------------------------------------------------
+  build-linux-package:
+    name: Build & package (Linux, CMake)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    needs: [contract-tests]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config ccache dpkg-dev zip \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev \
+            libjbig2dec0-dev libjpeg-dev libopenjp2-7-dev \
+            libfreetype-dev libgumbo-dev libgl1-mesa-dev \
+            rpm
+
+      # CPack fails the WHOLE run (exit 1) if any single generator fails, even
+      # when the others succeeded. The RPM generator needs rpmbuild, so assert
+      # it is present up front; otherwise a missing tool looks like a packaging
+      # bug and the already-built TGZ/DEB are needlessly discarded.
+      - name: Assert the packaging toolchain is complete
+        run: |
+          set -euo pipefail
+          for tool in cpack dpkg-deb rpmbuild zip; do
+            command -v "${tool}" >/dev/null \
+              || { echo "::error::required packaging tool '${tool}' is missing"; exit 1; }
+          done
+          echo "packaging toolchain present"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: "6.7.2"
+          modules: "all"
+          cache: true
+
+      # NOTE: the configure preset and the package preset must agree.
+      # `cpack --preset linux-release` reads
+      # CMakePresets.json's packagePresets.linux-release, whose configurePreset
+      # is `linux-release` -- it operates on build/linux-release. Building
+      # `linux-vendored` and then packaging `linux-release` packages a build
+      # directory that was never configured here, which fails. We therefore
+      # build linux-release directly, forcing the vendored dependencies so the
+      # release is reproducible (the same intent the linux-vendored preset
+      # encodes).
+      - name: Build and package (linux-release preset, vendored deps)
+        run: |
+          cmake --preset linux-release \
+            -DSIOYEK_USE_SYSTEM_MUPDF=OFF \
+            -DSIOYEK_USE_SYSTEM_SQLITE=OFF
+          cmake --build --preset linux-release -j"$(nproc)"
+          cpack --preset linux-release
+
+      - name: Verify the packages exist
+        run: |
+          set -euo pipefail
+          ls -la build/linux-release/*.deb build/linux-release/*.rpm build/linux-release/*.tar.gz
+
+      - name: Verify package contents match the install contract
+        run: |
+          set -euo pipefail
+          tar tzf build/linux-release/*.tar.gz > /tmp/tgz-contents.txt
+          for f in usr/bin/sioyek usr/share/sioyek/tutorial.pdf usr/share/man/man1/sioyek.1; do
+            grep -q "$f" /tmp/tgz-contents.txt || { echo "::error::missing $f in the TGZ"; exit 1; }
+          done
+          dpkg-deb -c build/linux-release/*.deb | grep -q "usr/bin/sioyek" \
+            || { echo "::error::usr/bin/sioyek missing from the DEB"; exit 1; }
+          echo "package contents verified"
+
+      - name: Smoke test the packaged binary
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar xzf build/linux-release/*.tar.gz -C /tmp/verify
+          BIN=/tmp/verify/usr/bin/sioyek
+          test -x "$BIN"
+          if ldd "$BIN" | grep -q "not found"; then
+            echo "::error::unresolved dynamic dependencies:"; ldd "$BIN" | grep "not found"; exit 1
+          fi
+          echo "packaged binary resolves all dynamic dependencies"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmake-linux-packages
+          path: |
+            build/linux-release/*.deb
+            build/linux-release/*.rpm
+            build/linux-release/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. Portable bundle: the self-contained layout, produced purely through the
+  #    install contract. Also exercises `uninstall` against a real tree.
+  # ---------------------------------------------------------------------------
+  build-linux-portable:
+    name: Build & package (Linux portable, CMake)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    needs: [contract-tests]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        # patchelf is required by Qt's deployment helper: the portable layout
+        # enables SIOYEK_INSTALL_QT_DEPLOY, which rewrites the RUNPATH of the
+        # deployed Qt plugins with patchelf. Without it `cmake --install` fails
+        # while trying to make those plugins relocatable.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config ccache patchelf zip \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev \
+            libjbig2dec0-dev libjpeg-dev libopenjp2-7-dev \
+            libfreetype-dev libgumbo-dev libgl1-mesa-dev
+
+      - name: Assert the portable toolchain is complete
+        run: |
+          set -euo pipefail
+          for tool in patchelf zip; do
+            command -v "${tool}" >/dev/null \
+              || { echo "::error::required tool '${tool}' is missing"; exit 1; }
+          done
+          echo "portable toolchain present"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: "6.7.2"
+          modules: "all"
+          cache: true
+
+      - name: Build (linux-portable preset)
+        run: |
+          cmake --preset linux-portable
+          cmake --build --preset linux-portable -j"$(nproc)"
+
+      - name: Stage the portable install tree
+        run: |
+          set -euo pipefail
+          rm -rf stage
+          DESTDIR="${PWD}/stage" cmake --install build/linux-portable
+          test -x stage/usr/bin/sioyek
+          test -f stage/usr/bin/tutorial.pdf
+          test -d stage/usr/bin/shaders
+
+      - name: Verify uninstall removes exactly what was installed
+        # CRITICAL: DESTDIR must be passed to `cmake --build` as an ENVIRONMENT
+        # variable. The staged install recorded DESTDIR-prefixed paths in the
+        # manifest, and the uninstall rule resolves them from $ENV{DESTDIR} at
+        # run time. Invoking the target without it would resolve the paths
+        # against the REAL prefix and delete the host's installation instead of
+        # the staged copy.
+        env:
+          DESTDIR: ${{ github.workspace }}/stage
+        run: |
+          set -euo pipefail
+          before=$(find stage -type f | wc -l)
+          cmake --build build/linux-portable --target uninstall
+          after=$(find stage -type f | wc -l)
+          echo "files before uninstall: ${before}, after: ${after}"
+          test "${before}" -gt 0
+          test "${after}" -eq 0
+          echo "uninstall removed every installed file"
+
+      - name: Re-stage and archive the portable bundle
+        run: |
+          set -euo pipefail
+          rm -rf stage
+          DESTDIR="${PWD}/stage" cmake --install build/linux-portable
+          ( cd stage/usr && zip -r "${GITHUB_WORKSPACE}/sioyek-cmake-portable.zip" . )
+
+      - name: Upload the portable bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmake-linux-portable
+          path: sioyek-cmake-portable.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 4. Publish. Only on a tag or a manual run, never on a pull request.
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [build-linux-package, build-linux-portable]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+
+      - name: List what will be published
+        run: find dist -type f | sort
+
+      - name: Create or update the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('cmake-manual-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('CMake manual build {0}', github.run_number) }}
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          files: |
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.tar.gz
+            dist/**/*.zip
+          fail_on_unmatched_files: true
