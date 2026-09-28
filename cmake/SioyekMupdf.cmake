@@ -500,7 +500,57 @@ else()
     endif()
 
     set(SIOYEK_MUPDF_SOURCE "vendored" CACHE INTERNAL "Chosen mupdf source")
-    set(SIOYEK_MUPDF_VERSION "1.26.11" CACHE INTERNAL "Chosen mupdf version")
+
+    # Report the version that the VENDORED SUBMODULE actually is, read from
+    # mupdf's own header rather than hard-coded.
+    #
+    # WHY: this used to be the literal string "1.26.11" regardless of what the
+    # submodule pointed at. Updating mupdf/ then left the build system asserting
+    # a version it was not building, and -- because SIOYEK_MUPDF_VERIFIED_MIN and
+    # the verified/extended ranges below are anchored on that same number -- the
+    # "verified range" logic silently lost its meaning. mupdf ships the version
+    # in include/mupdf/fitz/version.h as FZ_VERSION, which is the single source
+    # of truth for what the sources are; parse it from there.
+    set(_sioyek_mupdf_version "unknown")
+    set(_sioyek_mupdf_version_header
+        "${_sioyek_mupdf_src}/include/mupdf/fitz/version.h")
+    if(EXISTS "${_sioyek_mupdf_version_header}")
+        file(STRINGS "${_sioyek_mupdf_version_header}" _sioyek_mupdf_version_lines
+             REGEX "^[ \t]*#[ \t]*define[ \t]+FZ_VERSION[ \t]+\"")
+        if(_sioyek_mupdf_version_lines)
+            string(REGEX MATCH "\"([^\"]+)\"" _sioyek_mupdf_version_match
+                   "${_sioyek_mupdf_version_lines}")
+            if(CMAKE_MATCH_1)
+                set(_sioyek_mupdf_version "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        # Warn when the vendored sources fall outside the range this build system
+        # claims to have verified. Previously impossible to detect, because the
+        # reported version was a constant.
+        if(NOT _sioyek_mupdf_version STREQUAL "unknown")
+            _sioyek_mupdf_version_is_verified(_sioyek_vendored_verified
+                "${_sioyek_mupdf_version}")
+            if(NOT _sioyek_vendored_verified)
+                message(WARNING
+                    "sioyek: the vendored mupdf submodule is version "
+                    "${_sioyek_mupdf_version}, which is OUTSIDE the verified range "
+                    "[${SIOYEK_MUPDF_VERIFIED_MIN}, ${SIOYEK_MUPDF_VERIFIED_MAX_EXCLUSIVE}).
+"
+                    "         sioyek reads mupdf public struct fields directly (ABI-level "
+                    "coupling), so this combination has not been verified and may fail to "
+                    "compile or misbehave at run time.
+"
+                    "         Update SIOYEK_MUPDF_VERIFIED_MIN/MAX in cmake/SioyekMupdf.cmake "
+                    "once this mupdf version has been tested.")
+            endif()
+        endif()
+    else()
+        message(STATUS
+            "sioyek: could not read the vendored mupdf version "
+            "(${_sioyek_mupdf_version_header} is missing).")
+    endif()
+
+    set(SIOYEK_MUPDF_VERSION "${_sioyek_mupdf_version}" CACHE INTERNAL "Chosen mupdf version")
 
     if(NOT _sioyek_mupdf_src_ok)
         message(STATUS "sioyek: vendored mupdf sources missing; building the sioyek target will fail (see warning above).")

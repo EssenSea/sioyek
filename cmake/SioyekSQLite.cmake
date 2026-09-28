@@ -94,22 +94,79 @@ if(_sioyek_sqlite_target)
     file(WRITE "${_sioyek_probe_src_dir}/CMakeLists.txt"
 "cmake_minimum_required(VERSION 3.16)
 project(sqlite_probe C)
-list(APPEND CMAKE_MODULE_PATH \"${CMAKE_CURRENT_SOURCE_DIR}/cmake\")
+list(APPEND CMAKE_MODULE_PATH \"${CMAKE_CURRENT_SOURCE_DIR}/cmake\") # interpolated at file(WRITE) time: this is the MAIN project source dir, which is what makes the probe able to include(SioyekDependencies)
 include(SioyekDependencies)
 sioyek_find_dependency(NAME SQLite3 PKG_NAMES sqlite3 OUT_TARGET SQLITE_T OUT_VERSION SQLITE_V REQUIRED)
 add_executable(sqlite_probe main.c)
 target_link_libraries(sqlite_probe PRIVATE \"\${SQLITE_T}\")
 ")
+    # Inherit the caller's toolchain and search configuration.
+    #
+    # WHY: try_compile starts a CHILD CMake project. Without forwarding the
+    # toolchain-relevant cache entries, that child configures with the *host*
+    # compiler and default search paths while the real build uses the cross
+    # toolchain -- so the probe's verdict ("does the system SQLite link?") would
+    # be about a different platform than the one being built. This matters here
+    # because sioyek ships an Android build. The list below is the standard set
+    # CMAKE_TRY_COMPILE_PLATFORM_VARIABLES would carry, extended with the
+    # dependency-discovery paths our own sioyek_find_dependency() relies on.
+    set(_sioyek_probe_forward
+        CMAKE_C_STANDARD
+        CMAKE_TOOLCHAIN_FILE
+        CMAKE_SYSROOT
+        CMAKE_SYSTEM_NAME
+        CMAKE_SYSTEM_PROCESSOR
+        CMAKE_C_COMPILER
+        CMAKE_C_COMPILER_TARGET
+        CMAKE_C_FLAGS
+        CMAKE_EXE_LINKER_FLAGS
+        CMAKE_PREFIX_PATH
+        CMAKE_FIND_ROOT_PATH
+        CMAKE_FIND_ROOT_PATH_MODE_LIBRARY
+        CMAKE_FIND_ROOT_PATH_MODE_INCLUDE
+        CMAKE_FIND_ROOT_PATH_MODE_PACKAGE
+        PKG_CONFIG_EXECUTABLE
+        PKG_CONFIG_PATH
+        ENV{PKG_CONFIG_PATH}
+        ENV{PKG_CONFIG_LIBDIR}
+        ENV{PKG_CONFIG_SYSROOT_DIR}
+    )
+    set(_sioyek_probe_cmake_flags "")
+    foreach(_pv IN LISTS _sioyek_probe_forward)
+        # ENV{...} entries use the environment variable's current value.
+        if(_pv MATCHES "^ENV\\{(.*)\\}$")
+            set(_pname "${CMAKE_MATCH_1}")
+            if(DEFINED ENV{${_pname}})
+                list(APPEND _sioyek_probe_cmake_flags
+                     "-D${_pname}=$ENV{${_pname}}")
+            endif()
+        elseif(DEFINED ${_pv} AND NOT "${${_pv}}" STREQUAL "")
+            list(APPEND _sioyek_probe_cmake_flags "-D${_pv}=${${_pv}}")
+        endif()
+    endforeach()
+
     try_compile(_sioyek_sqlite_probe_ok
         "${CMAKE_CURRENT_BINARY_DIR}/_sioyek_sqlite_probe_build"
         "${_sioyek_probe_src_dir}"
         sqlite_probe
-        CMAKE_FLAGS "-DCMAKE_C_STANDARD=11"
+        CMAKE_FLAGS ${_sioyek_probe_cmake_flags}
         OUTPUT_VARIABLE _sioyek_sqlite_probe_output)
     if(_sioyek_sqlite_probe_ok)
         set(_sioyek_sys_sqlite_probe_ok TRUE)
     else()
         set(_sioyek_sys_sqlite_probe_ok FALSE)
+        # Surface WHY the probe failed. The output used to be captured but never
+        # shown, so an unusable/incompatible system SQLite (or a genuine
+        # discovery problem) was indistinguishable from "not installed" -- the
+        # caller only saw the generic "failed the compile probe" message.
+        # The full log is also kept at the probe build directory for inspection.
+        string(STRIP "${_sioyek_sqlite_probe_output}" _sioyek_sqlite_probe_output_trimmed)
+        if(_sioyek_sqlite_probe_output_trimmed)
+            message(STATUS
+                "sioyek: system SQLite compile probe failed; try_compile output follows "
+                "(full log: ${CMAKE_CURRENT_BINARY_DIR}/_sioyek_sqlite_probe_build/CMakeFiles/CMakeConfigureLog.yaml)")
+            message(STATUS "${_sioyek_sqlite_probe_output}")
+        endif()
     endif()
 endif()
 
