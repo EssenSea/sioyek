@@ -128,6 +128,31 @@ done < <("${PARSER}" --list)
 [[ ${missing} -eq 0 ]] && ok "every option appears in make options and ./configure --help" \
     || bad "${missing} option(s) missing from help"
 
+# --- installation-directory options (autoconf/GNUInstallDirs) ---------------
+out="$(run_parser --prefix=/usr)"
+grep -q -- '-DCMAKE_INSTALL_PREFIX=/usr' <<<"${out}" && ok "--prefix=/usr -> CMAKE_INSTALL_PREFIX" \
+    || bad "--prefix not translated (got: ${out})"
+
+out="$(run_parser --sysconfdir=/etc)"
+grep -q -- '-DCMAKE_INSTALL_SYSCONFDIR=/etc' <<<"${out}" && ok "--sysconfdir=/etc -> CMAKE_INSTALL_SYSCONFDIR" \
+    || bad "--sysconfdir not translated (got: ${out})"
+
+out="$(run_parser --bindir=/usr/bin --mandir=/usr/share/man --docdir=/usr/share/doc/sioyek)"
+grep -q -- '-DCMAKE_INSTALL_BINDIR=/usr/bin' <<<"${out}" \
+    && grep -q -- '-DCMAKE_INSTALL_MANDIR=/usr/share/man' <<<"${out}" \
+    && grep -q -- '-DCMAKE_INSTALL_DOCDIR=/usr/share/doc/sioyek' <<<"${out}" \
+    && ok "multiple dir options translated" || bad "dir options not translated (got: ${out})"
+
+nlist="$("${PARSER}" --list-dirs | wc -l)"
+[[ "${nlist}" -ge 10 ]] && ok "--list-dirs prints the directory table (${nlist})" \
+    || bad "--list-dirs too short (${nlist})"
+
+# ./configure must record dir options and list them in --help
+conf_help="$("${REPO_ROOT}/configure" --help 2>/dev/null)"
+grep -q -- "--prefix=" <<<"${conf_help}" && grep -q -- "--sysconfdir=" <<<"${conf_help}" \
+    && ok "./configure --help lists installation-directory options" \
+    || bad "./configure --help missing dir options"
+
 # --- unknown option fails ---------------------------------------------------
 if "${PARSER}" --enable-frobnicate >/dev/null 2>&1; then
     bad "unknown option --enable-frobnicate should fail"
@@ -175,6 +200,16 @@ if command -v make >/dev/null 2>&1; then
     fi
 
     # ./configure --preset=... sets the default preset used by make.
+    # --prefix/--sysconfdir are recorded too.
+    (cd "${CONFROOT}" && ./configure --prefix=/opt/sioyek --sysconfdir=/etc >/dev/null 2>&1)
+    cmd="$(cd "${CONFROOT}" && make -n configure 2>/dev/null)"
+    if grep -q -- '-DCMAKE_INSTALL_PREFIX=/opt/sioyek' <<<"${cmd}" \
+       && grep -q -- '-DCMAKE_INSTALL_SYSCONFDIR=/etc' <<<"${cmd}"; then
+        ok "./configure records installation directories"
+    else
+        bad "installation directories not recorded (got: ${cmd})"
+    fi
+
     (cd "${CONFROOT}" && ./configure --preset=linux-portable >/dev/null 2>&1)
     cmd="$(cd "${CONFROOT}" && make -n configure 2>/dev/null)"
     grep -q -- "--preset linux-portable" <<<"${cmd}" && ok "./configure --preset sets the default preset" \
@@ -303,9 +338,17 @@ fi
 echo "--- defaults without config.mk ---"
 
 if command -v make >/dev/null 2>&1; then
-    cmd="$(cd "${REPO_ROOT}" && env -u SIOYEK_CONFIGURE_FLAGS make -n configure PRESET=linux-release 2>/dev/null)"
+    # Use a clean throwaway tree without config.mk so the check is independent of
+    # the developer's working tree.
+    NOCFG="${WORK}/nocfg"
+    mkdir -p "${NOCFG}"
+    cp "${REPO_ROOT}/configure" "${REPO_ROOT}/Makefile" "${REPO_ROOT}/CMakePresets.json" "${NOCFG}/"
+    mkdir -p "${NOCFG}/cmake"
+    cp "${REPO_ROOT}/cmake/options.mk" "${REPO_ROOT}/cmake/parse-build-options.sh" "${NOCFG}/cmake/"
+    cmd="$(cd "${NOCFG}" && make -n configure 2>/dev/null)"
     if grep -q -- "--preset linux-release" <<<"${cmd}" \
-       && ! grep -q -- '-DSIOYEK_' <<<"${cmd}"; then
+       && ! grep -q -- '-DSIOYEK_' <<<"${cmd}" \
+       && ! grep -q -- '-DCMAKE_INSTALL_' <<<"${cmd}"; then
         ok "make works with no config.mk (no injected -D flags)"
     else
         bad "make without config.mk unexpected (got: ${cmd})"

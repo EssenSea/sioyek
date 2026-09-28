@@ -23,6 +23,13 @@ for n in $names; do
 opts="$opts --enable-$n --disable-$n --with-$n --without-$n"
 done
 
+# Installation-directory options (--prefix=, --sysconfdir=, ...).
+if [ -x "$parser" ]; then
+for d in $("$parser" --list-dirs | cut -d: -f1); do
+opts="$opts --$d="
+done
+fi
+
 if [[ ${cur} == --preset=* ]]; then
 local presets
 presets=$(cd "$here" 2>/dev/null && cmake --list-presets 2>/dev/null \

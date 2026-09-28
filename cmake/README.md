@@ -141,7 +141,23 @@ make                                   # default preset is now linux-portable
 ./configure --wipe                     # reset to defaults
 ```
 
+Installation directories use the standard autoconf/GNUInstallDirs spellings
+(`--prefix`, `--bindir`, `--sysconfdir`, `--libdir`, `--mandir`, `--docdir`, ...):
+
+```sh
+./configure --prefix=/usr --sysconfdir=/etc --bindir=/usr/bin
+make install DESTDIR=/tmp/stage
+```
+
 | `./configure` flag | CMake variable |
+|---|---|
+| `--prefix=DIR` (`--exec-prefix=DIR`) | `-DCMAKE_INSTALL_PREFIX=DIR` |
+| `--bindir=DIR` | `-DCMAKE_INSTALL_BINDIR=DIR` |
+| `--libdir=DIR` / `--libexecdir=DIR` / `--includedir=DIR` | `-DCMAKE_INSTALL_*=DIR` |
+| `--sysconfdir=DIR` / `--localstatedir=DIR` / `--runstatedir=DIR` | `-DCMAKE_INSTALL_*=DIR` |
+| `--datadir=DIR` / `--mandir=DIR` / `--docdir=DIR` | `-DCMAKE_INSTALL_*=DIR` (see `make options`) |
+
+| Feature flag | CMake variable |
 |---|---|
 | `--enable-X` / `--with-X` | `-DSIOYEK_*=ON` |
 | `--disable-X` / `--without-X` | `-DSIOYEK_*=OFF` |

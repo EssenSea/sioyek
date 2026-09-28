@@ -32,6 +32,9 @@ endif
 options:
 	@echo 'Friendly build options for ./configure (and make options):'
 	@echo ''
+	@echo '  Installation directories (--<name>=DIR):'
+	@./cmake/parse-build-options.sh --list-dirs | sed 's/^/    --/;s/:/=DIR  ->  /'
+	@echo ''
 	@echo '  --enable-X / --disable-X / --with-X / --without-X   (all equivalent,'
 	@echo '  per autoconf: --with-X == --enable-X, --without-X == --disable-X).'
 	@echo '  --enable-X=VALUE also accepted; yes/on/1 -> ON, no/off/0 -> OFF.'

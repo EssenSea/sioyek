@@ -39,10 +39,35 @@ mupdf-unembed-fonts:SIOYEK_MUPDF_UNEMBED_FONTS
 package-formats:SIOYEK_PACKAGE_FORMATS
 "
 
-# --list: print the option table (name:CMakeVar), one per line, for generated
-# help/completion.
+# Installation-directory options (autoconf/GNUInstallDirs style): name:CMakeVar.
+# These take a DIR value, e.g. --prefix=/usr, --sysconfdir=/etc.
+DIRS="
+prefix:CMAKE_INSTALL_PREFIX
+exec-prefix:CMAKE_INSTALL_PREFIX
+bindir:CMAKE_INSTALL_BINDIR
+libdir:CMAKE_INSTALL_LIBDIR
+libexecdir:CMAKE_INSTALL_LIBEXECDIR
+includedir:CMAKE_INSTALL_INCLUDEDIR
+datarootdir:CMAKE_INSTALL_DATAROOTDIR
+datadir:CMAKE_INSTALL_DATADIR
+sysconfdir:CMAKE_INSTALL_SYSCONFDIR
+localstatedir:CMAKE_INSTALL_LOCALSTATEDIR
+runstatedir:CMAKE_INSTALL_RUNSTATEDIR
+sharedstatedir:CMAKE_INSTALL_SHAREDSTATEDIR
+mandir:CMAKE_INSTALL_MANDIR
+docdir:CMAKE_INSTALL_DOCDIR
+"
+
+# --list: print the feature option table (name:CMakeVar), one per line, for
+# generated help/completion.
 if [ "${1:-}" = "--list" ]; then
 for pair in $OPTIONS; do echo "$pair"; done
+exit 0
+fi
+
+# --list-dirs: print the installation-directory table (name:CMakeVar).
+if [ "${1:-}" = "--list-dirs" ]; then
+for pair in $DIRS; do echo "$pair"; done
 exit 0
 fi
 
@@ -68,6 +93,21 @@ without-*) a="--$a" ;;
 esac
 
 matched=0
+
+# Installation-directory options: --prefix=DIR, --sysconfdir=DIR, ...
+case "$a" in
+--*=*)
+dkey=${a#--}; dkey=${dkey%%=*}; dval=${a#*=}
+for pair in $DIRS; do
+k=${pair%%:*}; v=${pair##*:}
+if [ "$k" = "$dkey" ]; then
+out="$out -D$v=$dval"
+matched=1
+break
+fi
+done
+;;
+esac
 
 # Split "key" and optional "=VALUE".
 key=${a#--}
