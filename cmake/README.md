@@ -124,6 +124,31 @@ make linux-release EXTRA_CMAKE_ARGS="--disable-lto"
 make install-linux-portable DESTDIR=/tmp/stage EXTRA_CMAKE_ARGS="--enable-strip-on-install"
 ```
 
+#### Inline options: `sioyek-make`
+
+GNU make cannot accept unknown `--long` options on its command line, so
+`make linux-vendored --enable-lto` fails inside make. The bundled
+**`./sioyek-make`** wrapper peels the friendly options off the command line and
+forwards the rest to make, so you can write them **directly after the target**:
+
+```sh
+./sioyek-make linux-vendored --enable-lto --disable-tests
+./sioyek-make install-linux-portable --with-system-mupdf DESTDIR=/tmp/stage
+./sioyek-make linux-release --disable-lto --with-install-layout=portable
+```
+
+`VAR=value` assignments and plain targets work as usual; with no friendly
+options it behaves exactly like `make`. To use the literal form
+`make <target> --enable-lto`, put `bin/` first on `PATH` (it contains a `make`
+symlink to the wrapper):
+
+```sh
+PATH="$PWD/bin:$PATH" make linux-vendored --enable-lto
+```
+
+The wrapper reuses `cmake/parse-build-options.sh`, so the option table is shared
+with the Makefile path.
+
 A git-ignored `local.mk` (see `contrib/local.mk.example`) can override `PRESET`,
 `CMAKE_EXTRA_FLAGS`, `EXTRA_CMAKE_ARGS`, `PREFIX`, `DESTDIR`, `JOBS`, ...
 

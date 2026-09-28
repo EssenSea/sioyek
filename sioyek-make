@@ -1,0 +1,86 @@
+#!/bin/sh
+# =============================================================================
+# sioyek-make -- `make` with friendly build options that may be written directly
+#                after the target, e.g.
+#
+#   ./sioyek-make linux-vendored --enable-lto --disable-tests
+#   ./sioyek-make install-linux-portable --with-system-mupdf DESTDIR=/tmp/stage
+#   ./sioyek-make linux-release --disable-lto --with-install-layout=portable
+#
+# GNU make cannot accept unknown `--long` options on its own command line, so
+# `make linux-vendored --enable-lto` fails inside make. This wrapper peels the
+# friendly --enable/--disable/--with/--without options (and VAR=VALUE overrides)
+# off the command line, translates the friendly ones to -DSIOYEK_* flags, and
+# exec's the real make with the rest.
+#
+# If installed/symlinked as `make` earlier in PATH, plain
+#   make linux-vendored --enable-lto
+# works too.
+#
+# The translation table is shared with the Makefile: cmake/parse-build-options.sh
+# =============================================================================
+set -eu
+
+# Locate the repository root (dir containing this script), resolving symlinks so
+# that a symlink such as bin/make -> ../sioyek-make still finds cmake/.
+self_path=$0
+if command -v readlink >/dev/null 2>&1; then
+# resolve the full chain
+while [ -L "$self_path" ]; do
+target=$(readlink "$self_path")
+case "$target" in
+/*) self_path=$target ;;
+*) self_path=$(dirname -- "$self_path")/$target ;;
+esac
+done
+fi
+self_dir=$(CDPATH= cd -- "$(dirname -- "$self_path")" && pwd)
+repo_root=$self_dir
+
+# Find the real make: prefer MAKE (env), else the first `make` in PATH that is
+# not this script.
+real_make=${MAKE:-}
+if [ -z "$real_make" ]; then
+for cand in /usr/bin/make /bin/make /usr/local/bin/make; do
+[ -x "$cand" ] && { real_make=$cand; break; }
+done
+fi
+if [ -z "$real_make" ]; then
+# fall back to PATH lookup, skipping ourselves
+old_ifs=$IFS; IFS=:
+for d in $PATH; do
+[ -x "$d/make" ] || continue
+abs="$d/make"
+[ "$abs" = "$0" ] && continue
+case "$(readlink -f "$abs" 2>/dev/null || echo "$abs")" in
+"$(readlink -f "$0" 2>/dev/null || echo "$0")") continue ;;
+esac
+real_make=$abs; break
+done
+IFS=$old_ifs
+fi
+if [ -z "$real_make" ]; then
+echo "sioyek-make: could not find the real 'make' (set MAKE=/path/to/make)" >&2
+exit 127
+fi
+
+friendly=""
+passthru=""
+for a in "$@"; do
+case "$a" in
+--enable-*|--disable-*|--with-*|--without-*)
+friendly="$friendly $a" ;;
+*)
+passthru="$passthru $a" ;;
+esac
+done
+
+if [ -n "$friendly" ]; then
+# Translate via the shared parser (single source of truth).
+flags=$("$repo_root/cmake/parse-build-options.sh" $friendly) || exit $?
+# shellcheck disable=SC2086
+exec "$real_make" -C "$repo_root" EXTRA_CMAKE_ARGS="$flags" $passthru
+else
+# shellcheck disable=SC2086
+exec "$real_make" -C "$repo_root" $passthru
+fi

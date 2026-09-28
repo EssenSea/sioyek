@@ -283,6 +283,7 @@ help:
 	@echo '  make list-presets         list available CMake presets'
 	@echo ''
 	@echo '  make options              list friendly --enable/--disable/--with build options'
+	@echo '  ./sioyek-make <target> --enable-X ...   inline friendly options (make rejects --long opts)'
 	@echo ''
 	@echo 'Variables: PRESET BUILD_DIR EXTRA_CMAKE_ARGS CMAKE_EXTRA_FLAGS DESTDIR PREFIX JOBS'
 	@echo 'Friendly options: make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"'

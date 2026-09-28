@@ -16,6 +16,8 @@
 #   - `make options` lists every mapped key
 #   - per-preset shortcuts (`make <preset>`, `make install-<preset>`, ...) exist,
 #     resolve to the right preset, and compose with the friendly options
+#   - the sioyek-make wrapper accepts friendly options *inline*, i.e.
+#     `./sioyek-make <target> --enable-X` (make itself rejects --long options)
 # =============================================================================
 set -u
 
@@ -197,6 +199,68 @@ if command -v make >/dev/null 2>&1 && [ -f "${REPO_ROOT}/CMakePresets.json" ]; t
     ok "generic targets (build/install/test/package) still work"
 else
     ok "make/CMakePresets.json unavailable; skipping shortcut checks"
+fi
+
+# ---------------------------------------------------------------------------
+# sioyek-make wrapper: friendly options may be written directly after the target,
+# i.e. `./sioyek-make linux-vendored --enable-lto` (plain `make` rejects it).
+# ---------------------------------------------------------------------------
+echo "--- sioyek-make inline options ---"
+
+WRAP="${REPO_ROOT}/sioyek-make"
+if [[ -x "${WRAP}" ]]; then
+    ok "sioyek-make wrapper exists and is executable"
+
+    # inline boolean after the target
+    cmd="$("${WRAP}" -n linux-vendored --enable-lto 2>/dev/null)"
+    if grep -qE -- "--preset linux-vendored" <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${cmd}"; then
+        ok "wrapper: '<target> --enable-lto' -> --preset + -DSIOYEK_ENABLE_LTO=ON"
+    else
+        bad "wrapper inline boolean failed (got: ${cmd})"
+    fi
+
+    # mixed enable/with/value, plus a make variable
+    cmd="$("${WRAP}" -n install-linux-portable --enable-strip-on-install \
+            --with-system-mupdf --with-install-layout=portable DESTDIR=/tmp/s 2>/dev/null)"
+    if grep -q -- '-DSIOYEK_STRIP_ON_INSTALL=ON' <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_INSTALL_LAYOUT=portable' <<<"${cmd}" \
+       && grep -q -- "DESTDIR='/tmp/s'" <<<"${cmd}"; then
+        ok "wrapper: mixed inline options + VAR=value pass through correctly"
+    else
+        bad "wrapper mixed options failed (got: ${cmd})"
+    fi
+
+    # no friendly options -> behaves like make
+    cmd="$("${WRAP}" -n help 2>/dev/null)"
+    grep -q "sioyek Make targets" <<<"${cmd}" && ok "wrapper: no options behaves like plain make" \
+        || bad "wrapper passthrough (no options) failed"
+
+    # unknown friendly option -> non-zero
+    if "${WRAP}" -n linux-release --enable-frobnicate >/dev/null 2>&1; then
+        bad "wrapper should reject an unknown option"
+    else
+        ok "wrapper rejects unknown options"
+    fi
+
+    # plain make must still reject the inline form (documents why the wrapper exists)
+    if command -v make >/dev/null 2>&1; then
+        if (cd "${REPO_ROOT}" && make -n linux-vendored --enable-lto >/dev/null 2>&1); then
+            bad "plain make unexpectedly accepted '--enable-lto'"
+        else
+            ok "plain make still rejects '--enable-lto' (wrapper is required)"
+        fi
+    fi
+
+    # bin/make symlink resolves the repo root correctly
+    if [[ -e "${REPO_ROOT}/bin/make" ]]; then
+        cmd="$(cd "${REPO_ROOT}" && PATH="${REPO_ROOT}/bin:$PATH" make -n linux-vendored --enable-lto 2>/dev/null)"
+        grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${cmd}" && ok "bin/make symlink resolves the repo root" \
+            || bad "bin/make symlink resolution failed (got: ${cmd})"
+    fi
+else
+    bad "sioyek-make wrapper missing"
 fi
 
 echo
