@@ -34,8 +34,7 @@ Usage: ./configure [OPTIONS]
 Autoconf-style front-end for sioyek's CMake build. Options are recorded in
 config.mk and used by subsequent \`make\` invocations.
 
-Configuration options (translated to -DSIOYEK_* CMake variables).
-Any of the four prefixes works for any option (autoconf convention:
+Any of the four prefixes works for every option (autoconf convention:
 --with-X == --enable-X, --without-X == --disable-X):
   --enable-X / --with-X               enable a feature (or =VALUE)
   --disable-X / --without-X           disable a feature
@@ -43,7 +42,13 @@ Any of the four prefixes works for any option (autoconf convention:
                                       no/off/0 -> OFF, else verbatim)
   -D<var>=<value>                     raw CMake flag (passed through)
 
-See all options with \`make options\`.
+Features (translated to -DSIOYEK_* CMake variables):
+EOF
+# Generated from the shared option table.
+while IFS=: read -r name var; do
+printf '  %-38s %s\n' "--enable-${name} / --with-${name}" "$var"
+done < <("$repo_root/cmake/parse-build-options.sh" --list)
+cat <<EOF
 
 Build selection:
   --preset=NAME                       default preset for \`make\` (e.g. linux-vendored)

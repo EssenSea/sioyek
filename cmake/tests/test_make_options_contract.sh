@@ -111,6 +111,23 @@ out="$(run_parser --with-system-mupdf=auto)"
 grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=AUTO' <<<"${out}" && ok "value normalization: auto -> AUTO" \
     || bad "auto not normalized (got: ${out})"
 
+# --- --list and help completeness -------------------------------------------
+nlist="$("${PARSER}" --list | wc -l)"
+[[ "${nlist}" -ge 18 ]] && ok "--list prints the option table (${nlist} options)" \
+    || bad "--list too short (${nlist})"
+
+# every option in the table must appear in `make options` AND in ./configure --help
+mk_help="$(cd "${REPO_ROOT}" && make options 2>/dev/null)"
+conf_help=""
+[ -x "${REPO_ROOT}/configure" ] && conf_help="$(cd "${REPO_ROOT}" && ./configure --help 2>/dev/null)"
+missing=0
+while IFS=: read -r name var; do
+    grep -q -- "--enable-${name}\|--with-${name}" <<<"${mk_help}" || missing=$((missing+1))
+    [ -n "${conf_help}" ] && { grep -q -- "--enable-${name}\|--with-${name}" <<<"${conf_help}" || missing=$((missing+1)); }
+done < <("${PARSER}" --list)
+[[ ${missing} -eq 0 ]] && ok "every option appears in make options and ./configure --help" \
+    || bad "${missing} option(s) missing from help"
+
 # --- unknown option fails ---------------------------------------------------
 if "${PARSER}" --enable-frobnicate >/dev/null 2>&1; then
     bad "unknown option --enable-frobnicate should fail"

@@ -152,9 +152,15 @@ make                                   # default preset is now linux-portable
 
 All four prefixes work for **every** option, matching autoconf conventions
 (`--with-X` == `--enable-X`, `--without-X` == `--disable-X`), so e.g.
-`--with-lto` and `--disable-system-mupdf` are both valid. `make options` prints
-the full table, which is generated from and shared with
-`cmake/parse-build-options.sh`.
+`--with-lto` and `--disable-system-mupdf` are both valid. `make options` and `./configure --help` both print
+the full table, generated from and shared with `cmake/parse-build-options.sh`.
+
+Shell completion for the options is available:
+
+```sh
+source contrib/configure-completion.bash
+./configure --en<TAB>     # lists --enable-lto, --enable-tests, ...
+```
 
 `./configure` and `make options` share the option table in
 `cmake/parse-build-options.sh`, so both stay in sync.

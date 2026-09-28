@@ -39,6 +39,13 @@ mupdf-unembed-fonts:SIOYEK_MUPDF_UNEMBED_FONTS
 package-formats:SIOYEK_PACKAGE_FORMATS
 "
 
+# --list: print the option table (name:CMakeVar), one per line, for generated
+# help/completion.
+if [ "${1:-}" = "--list" ]; then
+for pair in $OPTIONS; do echo "$pair"; done
+exit 0
+fi
+
 # Normalize a value token (yes/on/true/1 -> ON, no/off/false/0 -> OFF).
 _normalize_value() {
 case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
