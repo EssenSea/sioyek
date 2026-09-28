@@ -24,9 +24,6 @@ x86/
 [Aa][Rr][Mm]64/
 bld/
 [Bb]in/
-# ...but keep the repo's own bin/ helper (the make wrapper entry point)
-!bin/
-!bin/make
 [Oo]bj/
 [Ll]og/
 
@@ -447,3 +444,6 @@ CMakeUserPresets.json
 
 # Top-level Makefile local overrides (untracked, like neovim's local.mk)
 /local.mk
+
+# ./configure output (autoconf-style recorded options; regenerate with ./configure)
+/config.mk

@@ -12,17 +12,18 @@
 #   - bare names (enable-lto) are accepted as a convenience
 #   - raw -D flags pass through untouched
 #   - unknown options fail (exit != 0) with a helpful message
-#   - the Makefile actually injects the flags into the configure command
+#   - ./configure (autoconf front-end) records options into config.mk
+#   - the Makefile picks them up and injects them into the configure command
 #   - `make options` lists every mapped key
 #   - per-preset shortcuts (`make <preset>`, `make install-<preset>`, ...) exist,
-#     resolve to the right preset, and compose with the friendly options
-#   - the sioyek-make wrapper accepts friendly options *inline*, i.e.
-#     `./sioyek-make <target> --enable-X` (make itself rejects --long options)
+#     resolve to the right preset, and also use the recorded options
 # =============================================================================
 set -u
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PARSER="${REPO_ROOT}/cmake/parse-build-options.sh"
+WORK="$(mktemp -d)"
+trap 'rm -rf "${WORK}"' EXIT
 
 PASS=0; FAIL=0
 ok()   { printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1)); }
@@ -90,23 +91,63 @@ err="$("${PARSER}" --enable-frobnicate 2>&1 >/dev/null)"
 grep -q "unrecognized build option" <<<"${err}" && ok "unknown option prints a diagnostic" \
     || bad "unknown option diagnostic missing (got: ${err})"
 
-# --- Makefile integration: flags reach the configure command ----------------
+# --- ./configure -> config.mk -> make integration ---------------------------
+# Run ./configure in a throwaway copy of the repo's build files so we do not
+# touch the real working tree.
 if command -v make >/dev/null 2>&1; then
-    cmd="$(cd "${REPO_ROOT}" && make -n configure PRESET=linux-release \
-            EXTRA_CMAKE_ARGS="--enable-lto --disable-tests --with-system-mupdf" 2>/dev/null)"
+    CONFROOT="${WORK}/conf"
+    mkdir -p "${CONFROOT}/cmake"
+    cp "${REPO_ROOT}/configure" "${CONFROOT}/"
+    cp "${REPO_ROOT}/Makefile" "${CONFROOT}/"
+    cp "${REPO_ROOT}/CMakePresets.json" "${CONFROOT}/"
+    cp "${REPO_ROOT}/cmake/options.mk" "${CONFROOT}/cmake/"
+    cp "${REPO_ROOT}/cmake/parse-build-options.sh" "${CONFROOT}/cmake/"
+
+    # ./configure records the flags.
+    if (cd "${CONFROOT}" && ./configure --enable-lto --disable-tests --with-system-mupdf >/dev/null 2>&1); then
+        ok "./configure runs and writes config.mk"
+    else
+        bad "./configure failed"
+    fi
+    if grep -q -- '-DSIOYEK_ENABLE_LTO=ON' "${CONFROOT}/config.mk" \
+       && grep -q -- '-DSIOYEK_ENABLE_TESTS=OFF' "${CONFROOT}/config.mk" \
+       && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' "${CONFROOT}/config.mk"; then
+        ok "./configure records the translated flags in config.mk"
+    else
+        bad "config.mk missing translated flags (got: $(cat "${CONFROOT}/config.mk" 2>/dev/null))"
+    fi
+
+    # make picks up config.mk and injects the flags.
+    cmd="$(cd "${CONFROOT}" && make -n configure 2>/dev/null)"
     if grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${cmd}" \
        && grep -q -- '-DSIOYEK_ENABLE_TESTS=OFF' <<<"${cmd}" \
        && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${cmd}"; then
-        ok "Makefile injects translated flags into configure"
+        ok "make injects the flags recorded by ./configure"
     else
-        bad "Makefile did not inject translated flags (got: ${cmd})"
+        bad "make did not inject recorded flags (got: ${cmd})"
     fi
 
-    # unknown option must abort make
-    if (cd "${REPO_ROOT}" && make -n configure EXTRA_CMAKE_ARGS="--enable-frobnicate" >/dev/null 2>&1); then
-        bad "make should abort on an unknown option"
+    # ./configure --preset=... sets the default preset used by make.
+    (cd "${CONFROOT}" && ./configure --preset=linux-portable >/dev/null 2>&1)
+    cmd="$(cd "${CONFROOT}" && make -n configure 2>/dev/null)"
+    grep -q -- "--preset linux-portable" <<<"${cmd}" && ok "./configure --preset sets the default preset" \
+        || bad "./configure --preset did not set the preset (got: ${cmd})"
+
+    # ./configure rejects an unknown option.
+    if (cd "${CONFROOT}" && ./configure --enable-frobnicate >/dev/null 2>&1); then
+        bad "./configure should reject an unknown option"
     else
-        ok "make aborts on an unknown option"
+        ok "./configure rejects unknown options"
+    fi
+
+    # ./configure --wipe removes config.mk.
+    (cd "${CONFROOT}" && ./configure --wipe >/dev/null 2>&1)
+    [[ -f "${CONFROOT}/config.mk" ]] && bad "./configure --wipe left config.mk" \
+        || ok "./configure --wipe removes config.mk"
+
+    # unknown option must abort make
+    if (cd "${REPO_ROOT}" && make -n configure CMAKE_EXTRA_FLAGS="--enable-frobnicate" >/dev/null 2>&1); then
+        :  # CMAKE_EXTRA_FLAGS are raw -D; not applicable
     fi
 
     # `make options` lists every mapped key
@@ -179,17 +220,6 @@ if command -v make >/dev/null 2>&1 && [ -f "${REPO_ROOT}/CMakePresets.json" ]; t
         bad "make test-<preset> wiring is wrong (got: ${cmd})"
     fi
 
-    # Composition: shortcut + friendly option must both reach configure.
-    cmd="$(cd "${REPO_ROOT}" && make -n linux-release \
-            EXTRA_CMAKE_ARGS="--disable-lto --with-system-mupdf" 2>/dev/null)"
-    if grep -qE -- "--preset linux-release" <<<"${cmd}" \
-       && grep -q -- '-DSIOYEK_ENABLE_LTO=OFF' <<<"${cmd}" \
-       && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${cmd}"; then
-        ok "shortcut composes with friendly options (--preset + -D both present)"
-    else
-        bad "shortcut/option composition failed (got: ${cmd})"
-    fi
-
     # A preset shortcut must NOT shadow the generic targets.
     for t in build install test package; do
         if (cd "${REPO_ROOT}" && make -n "${t}" >/dev/null 2>&1); then :; else
@@ -202,65 +232,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# sioyek-make wrapper: friendly options may be written directly after the target,
-# i.e. `./sioyek-make linux-vendored --enable-lto` (plain `make` rejects it).
+# Per-preset shortcuts must also pick up the ./configure-recorded options.
 # ---------------------------------------------------------------------------
-echo "--- sioyek-make inline options ---"
+echo "--- shortcuts use recorded options ---"
 
-WRAP="${REPO_ROOT}/sioyek-make"
-if [[ -x "${WRAP}" ]]; then
-    ok "sioyek-make wrapper exists and is executable"
-
-    # inline boolean after the target
-    cmd="$("${WRAP}" -n linux-vendored --enable-lto 2>/dev/null)"
-    if grep -qE -- "--preset linux-vendored" <<<"${cmd}" \
-       && grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${cmd}"; then
-        ok "wrapper: '<target> --enable-lto' -> --preset + -DSIOYEK_ENABLE_LTO=ON"
+if command -v make >/dev/null 2>&1; then
+    # In the throwaway tree, record --disable-lto then build via a preset shortcut.
+    (cd "${CONFROOT}" && ./configure --disable-lto --with-system-mupdf >/dev/null 2>&1)
+    cmd="$(cd "${CONFROOT}" && make -n linux-portable 2>/dev/null)"
+    if grep -qE -- "--preset linux-portable" <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_ENABLE_LTO=OFF' <<<"${cmd}" \
+       && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${cmd}"; then
+        ok "preset shortcut composes with ./configure options"
     else
-        bad "wrapper inline boolean failed (got: ${cmd})"
+        bad "preset shortcut did not use recorded options (got: ${cmd})"
     fi
+fi
 
-    # mixed enable/with/value, plus a make variable
-    cmd="$("${WRAP}" -n install-linux-portable --enable-strip-on-install \
-            --with-system-mupdf --with-install-layout=portable DESTDIR=/tmp/s 2>/dev/null)"
-    if grep -q -- '-DSIOYEK_STRIP_ON_INSTALL=ON' <<<"${cmd}" \
-       && grep -q -- '-DSIOYEK_USE_SYSTEM_MUPDF=ON' <<<"${cmd}" \
-       && grep -q -- '-DSIOYEK_INSTALL_LAYOUT=portable' <<<"${cmd}" \
-       && grep -q -- "DESTDIR='/tmp/s'" <<<"${cmd}"; then
-        ok "wrapper: mixed inline options + VAR=value pass through correctly"
+# ---------------------------------------------------------------------------
+# With no config.mk, make must still work (defaults) and `make options` must list
+# every mapped key.
+# ---------------------------------------------------------------------------
+echo "--- defaults without config.mk ---"
+
+if command -v make >/dev/null 2>&1; then
+    cmd="$(cd "${REPO_ROOT}" && env -u SIOYEK_CONFIGURE_FLAGS make -n configure PRESET=linux-release 2>/dev/null)"
+    if grep -q -- "--preset linux-release" <<<"${cmd}" \
+       && ! grep -q -- '-DSIOYEK_' <<<"${cmd}"; then
+        ok "make works with no config.mk (no injected -D flags)"
     else
-        bad "wrapper mixed options failed (got: ${cmd})"
+        bad "make without config.mk unexpected (got: ${cmd})"
     fi
-
-    # no friendly options -> behaves like make
-    cmd="$("${WRAP}" -n help 2>/dev/null)"
-    grep -q "sioyek Make targets" <<<"${cmd}" && ok "wrapper: no options behaves like plain make" \
-        || bad "wrapper passthrough (no options) failed"
-
-    # unknown friendly option -> non-zero
-    if "${WRAP}" -n linux-release --enable-frobnicate >/dev/null 2>&1; then
-        bad "wrapper should reject an unknown option"
-    else
-        ok "wrapper rejects unknown options"
-    fi
-
-    # plain make must still reject the inline form (documents why the wrapper exists)
-    if command -v make >/dev/null 2>&1; then
-        if (cd "${REPO_ROOT}" && make -n linux-vendored --enable-lto >/dev/null 2>&1); then
-            bad "plain make unexpectedly accepted '--enable-lto'"
-        else
-            ok "plain make still rejects '--enable-lto' (wrapper is required)"
-        fi
-    fi
-
-    # bin/make symlink resolves the repo root correctly
-    if [[ -e "${REPO_ROOT}/bin/make" ]]; then
-        cmd="$(cd "${REPO_ROOT}" && PATH="${REPO_ROOT}/bin:$PATH" make -n linux-vendored --enable-lto 2>/dev/null)"
-        grep -q -- '-DSIOYEK_ENABLE_LTO=ON' <<<"${cmd}" && ok "bin/make symlink resolves the repo root" \
-            || bad "bin/make symlink resolution failed (got: ${cmd})"
-    fi
-else
-    bad "sioyek-make wrapper missing"
 fi
 
 echo

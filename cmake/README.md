@@ -88,12 +88,15 @@ Implications for build/CI work:
 
 ## 2. Quick start
 
-### Makefile wrapper (recommended for everyday use)
+### configure + Makefile (recommended for everyday use)
 
-A thin, Makefile-conventional wrapper is provided at the repository root; it
-just drives the CMake presets:
+An autoconf-style `./configure` records the build options into a git-ignored
+`config.mk`, and a thin Makefile drives the CMake presets:
 
 ```sh
+./configure                   # no options: use the defaults
+./configure --enable-lto --disable-tests --with-system-mupdf
+
 make                          # build (default PRESET=linux-release)
 make PRESET=linux-vendored    # build a specific preset
 make linux-vendored           # ...or the shortcut: `make <preset>`
@@ -106,6 +109,10 @@ make clean-build              # remove the whole build/ tree (all presets)
 make help                     # list all targets
 ```
 
+`./configure` options are remembered, so a later `make` (or any per-preset
+target) reuses them. Re-run `./configure` to change them; `./configure --wipe`
+resets to the defaults.
+
 Every configure preset gets a first-class shortcut target, derived from
 `cmake --list-presets` so it stays in sync automatically:
 
@@ -117,37 +124,34 @@ Every configure preset gets a first-class shortcut target, derived from
 | `make package-<preset>` | `make package PRESET=<preset>` |
 | `make clean-<preset>` | `make clean PRESET=<preset>` |
 
-Shortcuts compose with the friendly options and the usual variables, e.g.
+#### Autoconf-style `./configure`
+
+Build options use the familiar autoconf spelling and are recorded by
+`./configure` into a git-ignored `config.mk`, then reused by every subsequent
+`make`:
 
 ```sh
-make linux-release EXTRA_CMAKE_ARGS="--disable-lto"
-make install-linux-portable DESTDIR=/tmp/stage EXTRA_CMAKE_ARGS="--enable-strip-on-install"
+./configure --enable-lto --disable-tests --with-system-mupdf
+make                                   # builds with the recorded options
+make linux-portable                    # per-preset targets also use them
+
+./configure --with-install-layout=portable --preset=linux-portable
+make                                   # default preset is now linux-portable
+
+./configure --wipe                     # reset to defaults
 ```
 
-#### Inline options: `sioyek-make`
+| `./configure` flag | CMake variable |
+|---|---|
+| `--enable-X` / `--disable-X` | `-DSIOYEK_*=ON` / `=OFF` (booleans) |
+| `--with-X` / `--without-X` | `-DSIOYEK_*=ON` / `=OFF` (tri-state) |
+| `--with-X=VALUE` | `-DSIOYEK_*=VALUE` |
+| `-D<var>=<value>` | raw CMake flag (passed through) |
+| `--preset=NAME` | default `PRESET` for `make` |
+| `--help`, `--wipe` | usage / reset |
 
-GNU make cannot accept unknown `--long` options on its command line, so
-`make linux-vendored --enable-lto` fails inside make. The bundled
-**`./sioyek-make`** wrapper peels the friendly options off the command line and
-forwards the rest to make, so you can write them **directly after the target**:
-
-```sh
-./sioyek-make linux-vendored --enable-lto --disable-tests
-./sioyek-make install-linux-portable --with-system-mupdf DESTDIR=/tmp/stage
-./sioyek-make linux-release --disable-lto --with-install-layout=portable
-```
-
-`VAR=value` assignments and plain targets work as usual; with no friendly
-options it behaves exactly like `make`. To use the literal form
-`make <target> --enable-lto`, put `bin/` first on `PATH` (it contains a `make`
-symlink to the wrapper):
-
-```sh
-PATH="$PWD/bin:$PATH" make linux-vendored --enable-lto
-```
-
-The wrapper reuses `cmake/parse-build-options.sh`, so the option table is shared
-with the Makefile path.
+`./configure` and `make options` share the option table in
+`cmake/parse-build-options.sh`, so both stay in sync.
 
 A git-ignored `local.mk` (see `contrib/local.mk.example`) can override `PRESET`,
 `CMAKE_EXTRA_FLAGS`, `EXTRA_CMAKE_ARGS`, `PREFIX`, `DESTDIR`, `JOBS`, ...
