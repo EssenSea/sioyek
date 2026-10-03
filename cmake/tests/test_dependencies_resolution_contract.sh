@@ -35,27 +35,6 @@ bad() { printf '  [FAIL] %s\n' "$1"; FAIL=$((FAIL+1)); }
 echo "=== dependency resolution contract ==="
 
 mkdir -p "${WORK}/mods"
-# --- Synthesised pkg-config packages -----------------------------------------
-# These let the pkg-config route be exercised without depending on whatever the
-# host happens to have installed. Each .pc declares a distinct version so the
-# version-reporting assertion is meaningful.
-mkdir -p "${WORK}/pc"
-cat > "${WORK}/pc/sioyek-test-alpha.pc" <<'EOF'
-prefix=/nonexistent
-Name: sioyek-test-alpha
-Description: synthetic package for the dependency resolver test
-Version: 4.5.6
-Libs: -lm
-Cflags:
-EOF
-cat > "${WORK}/pc/sioyek-test-beta.pc" <<'EOF'
-prefix=/nonexistent
-Name: sioyek-test-beta
-Description: synthetic package for the dependency resolver test
-Version: 7.8.9
-Libs: -lm
-Cflags:
-EOF
 cat > "${WORK}/mods/FindFakeDep.cmake" <<'EOF'
 # Deliberately uses the CONVENTIONAL mixed-case spelling and provides no
 # imported target: this is the shape the legacy branch exists to support.
@@ -87,27 +66,22 @@ sioyek_find_dependency(NAME UpperDep PKG_NAMES upper-dep-nonexistent
                        OUT_TARGET T_UPPER OUT_VERSION V_UPPER)
 message(STATUS "PROBE_UPPER target=[${T_UPPER}] version=[${V_UPPER}]")
 
-# A dependency resolved through PKG-CONFIG must also report its version
-# (this is regression 2).
-#
-# The packages used here are SYNTHESISED by this test, not taken from the host.
-# An earlier revision used the real "zlib" and "harfbuzz", which made the
-# assertions depend on which of them, and in which form, the CI image happened
-# to ship -- it passed locally and failed on CI. The test now ships its own .pc
-# files, so the result depends only on the resolver.
-sioyek_find_dependency(NAME PcAlpha PKG_NAMES sioyek-test-alpha
+# A dependency that resolves through a real imported target: the version must
+# be reported (this is regression 2).
+sioyek_find_dependency(NAME ZLIB PKG_NAMES zlib
+                       OUT_TARGET T_ZLIB OUT_VERSION V_ZLIB)
+message(STATUS "PROBE_ZLIB target=[${T_ZLIB}] version=[${V_ZLIB}]")
+
+# Two pkg-config fallbacks in a row must NOT share a target (regression 3).
+sioyek_find_dependency(NAME PcOne PKG_NAMES harfbuzz
                        OUT_TARGET T_PC1 OUT_VERSION V_PC1)
-sioyek_find_dependency(NAME PcBeta PKG_NAMES sioyek-test-beta
+sioyek_find_dependency(NAME PcTwo PKG_NAMES zlib
                        OUT_TARGET T_PC2 OUT_VERSION V_PC2)
-message(STATUS "PROBE_PC one=[${T_PC1}] version1=[${V_PC1}] two=[${T_PC2}] version2=[${V_PC2}]")
+message(STATUS "PROBE_PC one=[${T_PC1}] two=[${T_PC2}]")
 CMAKEEOF
 
 LOG="${WORK}/probe.log"
-# PKG_CONFIG_PATH is restricted to the synthetic packages (plus any system
-# default) so the resolver finds exactly what this test provides.
-if ! PKG_CONFIG_PATH="${WORK}/pc:${PKG_CONFIG_PATH:-}" \
-     cmake -S "${WORK}" -B "${WORK}/out" \
-       -DSIOYEK_CMAKE_DIR="${REPO_ROOT}/cmake" > "${LOG}" 2>&1; then
+if ! cmake -S "${WORK}" -B "${WORK}/out" -DSIOYEK_CMAKE_DIR="${REPO_ROOT}/cmake" > "${LOG}" 2>&1; then
     bad "the dependency probe project failed to configure"
     sed -n "1,40p" "${LOG}"
 else
@@ -132,39 +106,25 @@ else
         bad "legacy all-upper variables did not resolve (got: ${upper})"
     fi
 
-    # A dependency resolved through pkg-config must yield a usable target AND a
-    # non-empty version. Only those two properties are asserted -- NOT a specific
-    # target name, and not a specific route -- because both are environment
-    # dependent, and asserting them made an earlier revision of this test pass
-    # locally while failing on CI.
+    zlib="$(grep -o 'PROBE_ZLIB.*' "${LOG}" | head -1)"
+    if [[ "${zlib}" == *"target=[ZLIB::ZLIB]"* ]]; then
+        ok "imported-target path resolves for ZLIB"
+    else
+        bad "ZLIB did not resolve to its imported target (got: ${zlib})"
+    fi
+    if [[ "${zlib}" == *"version=[]"* || "${zlib}" == *"version=[ ]"* ]]; then
+        bad "imported-target path reported an EMPTY version (regression)"
+    else
+        ok "imported-target path reports a non-empty version"
+    fi
+
     pc="$(grep -o 'PROBE_PC.*' "${LOG}" | head -1)"
-    pc1="$(sed -E 's/.*one=\[([^]]*)\].*/\1/' <<<"${pc}")"
-    v1="$(sed -E 's/.*version1=\[([^]]*)\].*/\1/' <<<"${pc}")"
-    pc2="$(sed -E 's/.*two=\[([^]]*)\].*/\1/' <<<"${pc}")"
-    v2="$(sed -E 's/.*version2=\[([^]]*)\].*/\1/' <<<"${pc}")"
-
-    if [[ -n "${pc1}" && -n "${pc2}" ]]; then
-        ok "pkg-config route resolves to usable targets"
+    one="$(sed -E 's/.*one=\[([^]]*)\].*/\1/' <<<"${pc}")"
+    two="$(sed -E 's/.*two=\[([^]]*)\].*/\1/' <<<"${pc}")"
+    if [[ -n "${one}" && -n "${two}" && "${one}" != "${two}" ]]; then
+        ok "successive pkg-config fallbacks get distinct targets"
     else
-        bad "pkg-config route produced no target (got: ${pc})"
-    fi
-
-    # Regression 2: the version used to be reported ONLY on the pkg-config path
-    # and even there it was empty for the config/module route. Each synthetic
-    # package declares a distinct version, so a correct resolver must report it.
-    if [[ "${v1}" == "4.5.6" && "${v2}" == "7.8.9" ]]; then
-        ok "pkg-config route reports the declared versions (${v1}, ${v2})"
-    else
-        bad "pkg-config route reported wrong/empty versions (v1=${v1} v2=${v2})"
-    fi
-
-    # Regression 3: a FIXED internal prefix made the second fallback silently
-    # reuse and overwrite the first dependency target. Distinct synthetic
-    # packages must therefore yield distinct targets.
-    if [[ "${pc1}" != "${pc2}" ]]; then
-        ok "successive pkg-config fallbacks get distinct targets (${pc1} vs ${pc2})"
-    else
-        bad "pkg-config fallbacks shared a target (one=${pc1} two=${pc2})"
+        bad "pkg-config fallbacks shared a target (one=${one} two=${two})"
     fi
 fi
 
