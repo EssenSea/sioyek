@@ -23,7 +23,7 @@
 # =============================================================================
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 parser="$repo_root/cmake/parse-build-options.sh"
 config_mk="$repo_root/config.mk"
 

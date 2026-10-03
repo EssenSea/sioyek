@@ -142,50 +142,16 @@ package: configure
 	cd $(BUILD_DIR) && cpack
 
 # ---- AppImage ---------------------------------------------------------------
-# Build a self-contained AppImage. Reuses the install contract so the packaged
-# contents match `cmake --install`. linuxdeploy (+ its Qt plugin) is downloaded
-# on demand into build/tools.
-APPIMAGE_PRESET  ?= linux-appimage
-APPIMAGE_BUILD   ?= build/$(APPIMAGE_PRESET)
-APPIMAGE_DIR     ?= build/appimage
-APPDIR           ?= $(APPIMAGE_DIR)/AppDir
-TOOLS_DIR        ?= build/tools
-LINUXDEPLOY_URL  ?= https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/linuxdeploy-x86_64.AppImage
-LINUXDEPLOY_QT_URL ?= https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20240109-1/linuxdeploy-plugin-qt-x86_64.AppImage
+# Thin forwarder: all AppImage packaging logic lives in CMake
+# (cmake/SioyekAppImage.cmake, enabled by the linux-appimage preset). This just
+# configures that preset and builds its `appimage` target, so the same operation
+# is available with pure CMake:
+#   cmake --preset linux-appimage && cmake --build build/linux-appimage --target appimage
+APPIMAGE_PRESET ?= linux-appimage
 
 appimage:
-	@echo "==> Configure/build ($(APPIMAGE_PRESET))"
 	$(CMAKE) --preset $(APPIMAGE_PRESET) $(SIOYEK_CONFIGURE_FLAGS) $(CMAKE_EXTRA_FLAGS)
-	$(CMAKE) --build --preset $(APPIMAGE_PRESET) -j$(JOBS)
-	@echo "==> Stage install into AppDir"
-	rm -rf "$(APPDIR)"
-	DESTDIR="$(CURDIR)/$(APPDIR)" $(CMAKE) --install "$(APPIMAGE_BUILD)"
-	@if [ -d "$(APPDIR)/usr/local" ] && [ ! -e "$(APPDIR)/usr/bin" ]; then \
-	mv "$(APPDIR)/usr/local"/* "$(APPDIR)/usr/" 2>/dev/null || true; \
-	rmdir "$(APPDIR)/usr/local" 2>/dev/null || true; \
-	fi
-	@echo "==> Fetch linuxdeploy if needed"
-	mkdir -p "$(TOOLS_DIR)"
-	@if [ ! -x "$(TOOLS_DIR)/linuxdeploy-x86_64.AppImage" ]; then \
-	wget -q -O "$(TOOLS_DIR)/linuxdeploy-x86_64.AppImage" $(LINUXDEPLOY_URL); \
-	chmod +x "$(TOOLS_DIR)/linuxdeploy-x86_64.AppImage"; \
-	fi
-	@if [ ! -x "$(TOOLS_DIR)/linuxdeploy-plugin-qt-x86_64.AppImage" ]; then \
-	wget -q -O "$(TOOLS_DIR)/linuxdeploy-plugin-qt-x86_64.AppImage" $(LINUXDEPLOY_QT_URL); \
-	chmod +x "$(TOOLS_DIR)/linuxdeploy-plugin-qt-x86_64.AppImage"; \
-	fi
-	@echo "==> Build AppImage"
-	mkdir -p "$(APPIMAGE_DIR)"
-	cd "$(TOOLS_DIR)" && \
-	QML_SOURCES_PATHS="$(CURDIR)/pdf_viewer/touchui" \
-	./linuxdeploy-x86_64.AppImage \
-	--appdir "$(CURDIR)/$(APPDIR)" \
-	--desktop-file "$(CURDIR)/$(APPDIR)/usr/share/applications/sioyek.desktop" \
-	--icon-file "$(CURDIR)/$(APPDIR)/usr/share/pixmaps/sioyek-icon-linux.png" \
-	--plugin qt \
-	--output appimage
-	mv -f "$(TOOLS_DIR)"/*.AppImage "$(APPIMAGE_DIR)/" 2>/dev/null || true
-	@echo "==> Done. AppImage in $(APPIMAGE_DIR)"
+	$(CMAKE) --build --preset $(APPIMAGE_PRESET) --target appimage -j$(JOBS)
 
 # ---- Code quality -----------------------------------------------------------
 # Format source with clang-format (uses .clang-format at the repo root).

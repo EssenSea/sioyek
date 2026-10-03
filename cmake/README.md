@@ -182,7 +182,7 @@ source contrib/configure-completion.bash
 `cmake/parse-build-options.sh`, so both stay in sync.
 
 A git-ignored `local.mk` (see `contrib/local.mk.example`) can override `PRESET`,
-`CMAKE_EXTRA_FLAGS`, `EXTRA_CMAKE_ARGS`, `PREFIX`, `DESTDIR`, `JOBS`, ...
+`CMAKE_EXTRA_FLAGS`, `PRESET`, `PREFIX`, `DESTDIR`, `JOBS`, ...
 
 ### Direct CMake
 
@@ -201,30 +201,49 @@ ctest --test-dir build --output-on-failure
 
 ---
 
-## 2b. Friendly build options (`--enable-*` / `--with-*`)
+## 2b. The Makefile and `./configure` are wrappers over CMake
 
-The CMake `-DSIOYEK_*` cache variables are the source of truth, but the top-level
-Makefile wraps them in familiar autoconf-style flags so users do not have to
-remember the spelling. Pass them through `EXTRA_CMAKE_ARGS`:
+**CMake is the source of truth.** Everything the Makefile and `./configure` do
+can be done directly with CMake; they only add convenience (short target names,
+autoconf-style option spellings, option recording). In particular there is **no
+build logic outside CMake** — the Makefile forwards to `cmake`/`ctest`/`cpack`,
+and `./configure` merely records `-D` flags in `config.mk`.
+
+| Convenience | Equivalent with pure CMake |
+|---|---|
+| `make <preset>` | `cmake --preset <preset> && cmake --build --preset <preset>` |
+| `make install` | `cmake --install build/<preset>` (with `DESTDIR`) |
+| `make test` | `cmake --build --preset <preset> && ctest --test-dir build/<preset>` |
+| `make package` | `cd build/<preset> && cpack` |
+| `make appimage` | `cmake --build --preset linux-appimage --target appimage` |
+| `make clean` / `distclean` / `clean-*` | `cmake --build build/<preset> --target clean*` |
+| `./configure --enable-X` | `cmake --preset <p> -DSIOYEK_*=ON` |
+| `./configure --prefix=/usr` | `cmake --preset <p> -DCMAKE_INSTALL_PREFIX=/usr` |
+| `make options` | `cmake -L` / the table in `cmake/parse-build-options.sh` |
+
+`./configure` accepts autoconf-style flags and records the resulting `-D` values
+in a git-ignored `config.mk`, which `make` then passes to CMake:
 
 ```sh
-make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"
-make build EXTRA_CMAKE_ARGS="--with-system-mupdf --with-install-layout=portable"
-make install DESTDIR=/tmp/stage EXTRA_CMAKE_ARGS="--enable-strip-on-install"
-make options            # list every supported flag and the CMake variable it maps to
+./configure --enable-lto --disable-tests --with-system-mupdf
+./configure --prefix=/usr --sysconfdir=/etc
+./configure --with-install-layout=portable --preset=linux-portable
+make options            # list every flag and the CMake variable it maps to
 ```
 
-| Friendly flag | CMake variable |
+| Flag | CMake variable |
 |---|---|
-| `--enable-X` / `--disable-X` | `-DSIOYEK_*=ON` / `=OFF` (booleans) |
-| `--with-X` / `--without-X` | `-DSIOYEK_*=ON` / `=OFF` (tri-state) |
-| `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (tri-state or value) |
+| `--enable-X` / `--with-X` | `-DSIOYEK_*=ON` |
+| `--disable-X` / `--without-X` | `-DSIOYEK_*=OFF` |
+| `--enable-X=VALUE` / `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
+| `--prefix=DIR` / `--sysconfdir=DIR` / ... | `-DCMAKE_INSTALL_*=DIR` |
+| `-D<var>=<value>` | passed through unchanged |
 
-* Bare names (`enable-lto`) are accepted too.
-* Raw `-D` flags still pass through unchanged.
-* An unknown option aborts the build with a pointer to `make options`.
-* The mapping lives in `cmake/parse-build-options.sh` (single source of truth);
-  `make options` prints it, and `test_make_options_contract.sh` guards it.
+* All four prefixes work for every option (autoconf semantics).
+* An unknown option aborts with a pointer to `make options`.
+* The mapping lives in `cmake/parse-build-options.sh` (single source of truth),
+  shared by `./configure`, `make options` and the shell completion, and guarded
+  by `test_make_options_contract.sh`.
 
 ---
 
