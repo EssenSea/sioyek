@@ -26,7 +26,11 @@ cmake/
 ├── SioyekInstall.cmake       authoritative install manifest
 ├── SioyekPackaging.cmake     CPack configuration
 ├── SioyekTesting.cmake       CTest registration
+├── SioyekUninstall.cmake     uninstall target (replays install_manifest.txt)
 ├── SioyekWarnings.cmake      warning policy + third-party isolation
+├── list-build-presets.cmake  preset discovery/query (no external tools)
+├── options.mk               `make options` help (rendered from the shared table)
+├── parse-build-options.sh    the option table + validation (single source of truth)
 └── tests/                    contract regression tests (bash)
 ```
 
@@ -52,9 +56,13 @@ CMake is the source of truth for the build. The pieces that matter:
   target may ever delete it** (see §5).
   The per-preset shortcut targets (`make <preset>`, `make install-<preset>`, ...)
   are discovered by `cmake/list-build-presets.cmake`, a small CMake script that
-  parses `CMakePresets.json`. This replaced a `cmake --list-presets | sed`
-  pipeline, removing the `sed` dependency (and making the discovery work under
-  the Makefile's Windows branch).
+  parses `CMakePresets.json`. This replaced a `cmake --list-presets | grep`
+  pipeline in the Makefile, so the discovery needs no external tools and works
+  under the Makefile's Windows branch. (Note: `make options` still formats its
+  help with `sed`/`awk` -- a display-only path; the option *table* has a single
+  source of truth in `cmake/parse-build-options.sh`.)
+  The same script answers `--has-package-preset`, which is what lets
+  `make package` use `cpack --preset` when the configure preset has one.
   The Makefile drives POSIX-sh recipes; on Windows run it from a POSIX
   environment that provides `sh` and `make` (Git for Windows "Git Bash",
   MSYS2, or Cygwin). It fails fast with an actionable message if no POSIX shell
@@ -113,6 +121,7 @@ make install-linux-portable DESTDIR=/tmp/stage   # shortcut: build + staged inst
 make test-linux-debug         # shortcut: build + ctest
 make test                     # build + run CTest
 make install DESTDIR=/tmp/stage
+make uninstall                # remove what a previous install wrote (see 4b)
 make distclean                # remove build/ and all generated artifacts
 make clean-build              # remove the whole build/ tree (all presets)
 make help                     # list all targets
@@ -123,15 +132,16 @@ target) reuses them. Re-run `./configure` to change them; `./configure --wipe`
 resets to the defaults.
 
 Every configure preset gets a first-class shortcut target, derived from
-`cmake --list-presets` so it stays in sync automatically:
+`CMakePresets.json` (via `cmake/list-build-presets.cmake`) so it stays in sync
+automatically:
 
-| Shortcut | Equivalent |
-|---|---|
-| `make <preset>` | `make build PRESET=<preset>` |
+| Shortcut                | Equivalent                     |
+|-------------------------|--------------------------------|
+| `make <preset>`         | `make build PRESET=<preset>`   |
 | `make install-<preset>` | `make install PRESET=<preset>` |
-| `make test-<preset>` | `make test PRESET=<preset>` |
+| `make test-<preset>`    | `make test PRESET=<preset>`    |
 | `make package-<preset>` | `make package PRESET=<preset>` |
-| `make clean-<preset>` | `make clean PRESET=<preset>` |
+| `make clean-<preset>`   | `make clean PRESET=<preset>`   |
 
 #### Autoconf-style `./configure`
 
@@ -158,22 +168,23 @@ Installation directories use the standard autoconf/GNUInstallDirs spellings
 make install DESTDIR=/tmp/stage
 ```
 
-| `./configure` flag | CMake variable |
-|---|---|
-| `--prefix=DIR` (`--exec-prefix=DIR`) | `-DCMAKE_INSTALL_PREFIX=DIR` |
-| `--bindir=DIR` | `-DCMAKE_INSTALL_BINDIR=DIR` |
-| `--libdir=DIR` / `--libexecdir=DIR` / `--includedir=DIR` | `-DCMAKE_INSTALL_*=DIR` |
-| `--sysconfdir=DIR` / `--localstatedir=DIR` / `--runstatedir=DIR` | `-DCMAKE_INSTALL_*=DIR` |
-| `--datadir=DIR` / `--mandir=DIR` / `--docdir=DIR` | `-DCMAKE_INSTALL_*=DIR` (see `make options`) |
+| `./configure` flag                                               | CMake variable                               |
+|------------------------------------------------------------------|----------------------------------------------|
+| `--prefix=DIR` (`--exec-prefix=DIR`)                             | `-DCMAKE_INSTALL_PREFIX=DIR`                 |
+| `--bindir=DIR`                                                   | `-DCMAKE_INSTALL_BINDIR=DIR`                 |
+| `--libdir=DIR` / `--libexecdir=DIR` / `--includedir=DIR`         | `-DCMAKE_INSTALL_*=DIR`                      |
+| `--sysconfdir=DIR` / `--localstatedir=DIR` / `--runstatedir=DIR` | `-DCMAKE_INSTALL_*=DIR`                      |
+| `--datadir=DIR` / `--mandir=DIR` / `--docdir=DIR`                | `-DCMAKE_INSTALL_*=DIR` (see `make options`) |
 
-| Feature flag | CMake variable |
-|---|---|
-| `--enable-X` / `--with-X` | `-DSIOYEK_*=ON` |
-| `--disable-X` / `--without-X` | `-DSIOYEK_*=OFF` |
-| `--enable-X=VALUE` / `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
-| `-D<var>=<value>` | raw CMake flag (passed through) |
-| `--preset=NAME` | default `PRESET` for `make` |
-| `--help`, `--wipe` | usage / reset |
+| Feature flag                          | CMake variable                        |
+|---------------------------------------|---------------------------------------|
+| `--enable-X` / `--with-X`             | `-DSIOYEK_*=ON`                       |
+| `--disable-X` / `--without-X`         | `-DSIOYEK_*=OFF`                      |
+| `--enable-X=VALUE` / `--with-X=VALUE` | `-DSIOYEK_*=VALUE`                    |
+|                                       | (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
+| `-D<var>=<value>`                     | raw CMake flag (passed through)       |
+| `--preset=NAME`                       | default `PRESET` for `make`           |
+| `--help`, `--wipe`                    | usage / reset                         |
 
 All four prefixes work for **every** option, matching autoconf conventions
 (`--with-X` == `--enable-X`, `--without-X` == `--disable-X`), so e.g.
@@ -212,23 +223,32 @@ ctest --test-dir build --output-on-failure
 
 ## 2b. The Makefile and `./configure` are wrappers over CMake
 
-**CMake is the source of truth.** Everything the Makefile and `./configure` do
-can be done directly with CMake; they only add convenience (short target names,
-autoconf-style option spellings, option recording). In particular there is **no
-build logic outside CMake** — the Makefile forwards to `cmake`/`ctest`/`cpack`,
-and `./configure` merely records `-D` flags in `config.mk`.
+**CMake is the source of truth for the CMake path.** Everything the Makefile and
+`./configure` do on that path can be done directly with CMake; they only add
+convenience (short target names, autoconf-style option spellings, option
+recording). The Makefile forwards to `cmake`/`ctest`/`cpack`, and `./configure`
+records `-D` flags in `config.mk`.
 
-| Convenience | Equivalent with pure CMake |
-|---|---|
-| `make <preset>` | `cmake --preset <preset> && cmake --build --preset <preset>` |
-| `make install` | `cmake --install build/<preset>` (with `DESTDIR`) |
-| `make test` | `cmake --build --preset <preset> && ctest --test-dir build/<preset>` |
-| `make package` | `cd build/<preset> && cpack` |
-| `make appimage` | `cmake --build --preset linux-appimage --target appimage` |
-| `make clean` / `distclean` / `clean-*` | `cmake --build build/<preset> --target clean*` |
-| `./configure --enable-X` | `cmake --preset <p> -DSIOYEK_*=ON` |
-| `./configure --prefix=/usr` | `cmake --preset <p> -DCMAKE_INSTALL_PREFIX=/usr` |
-| `make options` | `cmake -L` / the table in `cmake/parse-build-options.sh` |
+Scope note, stated plainly: this document describes the **CMake build system**
+(the presets, the modules under `cmake/`, and the Makefile / `./configure`
+wrappers). The repository also contains a **legacy qmake path**
+(`pdf_viewer_build_config.pro` plus the `build_*.sh` / `build_windows.bat` /
+`linuxdeploy_build_and_release.sh` scripts). That path is **not** covered by
+this document and is **not** exercised by the contract test suite; it is a
+genuinely separate source of build logic, out of scope here rather than unified.
+
+| Convenience                            | Equivalent with pure CMake                                            |
+|----------------------------------------|-----------------------------------------------------------------------|
+| `make <preset>`                        | `cmake --preset <preset> && cmake --build --preset <preset>`          |
+| `make install`                         | `cmake --install build/<preset>` (with `DESTDIR`)                     |
+| `make test`                            | `cmake --build --preset <preset> && ctest --test-dir build/<preset>`  |
+| `make package`                         | `cpack --preset <preset>` (falls back to `cd build/<preset> && cpack` |
+|                                        | when the configure preset has no package preset)                      |
+| `make appimage`                        | `cmake --build --preset linux-appimage --target appimage`             |
+| `make clean` / `distclean` / `clean-*` | `cmake --build build/<preset> --target clean*`                        |
+| `./configure --enable-X`               | `cmake --preset <p> -DSIOYEK_*=ON`                                    |
+| `./configure --prefix=/usr`            | `cmake --preset <p> -DCMAKE_INSTALL_PREFIX=/usr`                      |
+| `make options`                         | `cmake -L` / the table in `cmake/parse-build-options.sh`              |
 
 `./configure` accepts autoconf-style flags and records the resulting `-D` values
 in a git-ignored `config.mk`, which `make` then passes to CMake:
@@ -240,13 +260,13 @@ in a git-ignored `config.mk`, which `make` then passes to CMake:
 make options            # list every flag and the CMake variable it maps to
 ```
 
-| Flag | CMake variable |
-|---|---|
-| `--enable-X` / `--with-X` | `-DSIOYEK_*=ON` |
-| `--disable-X` / `--without-X` | `-DSIOYEK_*=OFF` |
-| `--enable-X=VALUE` / `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
-| `--prefix=DIR` / `--sysconfdir=DIR` / ... | `-DCMAKE_INSTALL_*=DIR` |
-| `-D<var>=<value>` | passed through unchanged |
+| Flag                                      | CMake variable                                           |
+|-------------------------------------------|----------------------------------------------------------|
+| `--enable-X` / `--with-X`                 | `-DSIOYEK_*=ON`                                          |
+| `--disable-X` / `--without-X`             | `-DSIOYEK_*=OFF`                                         |
+| `--enable-X=VALUE` / `--with-X=VALUE`     | `-DSIOYEK_*=VALUE` (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
+| `--prefix=DIR` / `--sysconfdir=DIR` / ... | `-DCMAKE_INSTALL_*=DIR`                                  |
+| `-D<var>=<value>`                         | passed through unchanged                                 |
 
 * All four prefixes work for every option (autoconf semantics).
 * An unknown option aborts with a pointer to `make options`.
@@ -272,15 +292,17 @@ make options            # list every flag and the CMake variable it maps to
 
 Controls build type, optimization and binary size.
 
-| Option | Default | Effect |
-|---|---|---|
-| `SIOYEK_STRIP_ON_INSTALL` | `OFF` | strip the installed binary |
-| `SIOYEK_PACKAGE_STRIP` | `OFF` | strip binaries inside CPack packages |
-| `SIOYEK_ENABLE_LTO` | `OFF` | interprocedural optimization |
-| `SIOYEK_ENABLE_CCACHE` | `AUTO` | use ccache/sccache if present **and its cache dir is writable**; `AUTO` silently falls back (with a warning) on an unusable cache, `ON` fails fast with guidance, `OFF` disables |
-| `SIOYEK_UNITY_BUILD` | `OFF` | CMake unity build (fewer TUs) |
-| `SIOYEK_SIZE_OPTIMIZATIONS` | `ON` | `-ffunction-sections -fdata-sections` + `--gc-sections --as-needed` |
-| `SIOYEK_HIDDEN_VISIBILITY` | `OFF` | `-fvisibility=hidden -fvisibility-inlines-hidden` |
+| Option                      | Default | Effect                                                              |
+|-----------------------------|---------|---------------------------------------------------------------------|
+| `SIOYEK_STRIP_ON_INSTALL`   | `OFF`   | strip the installed binary                                          |
+| `SIOYEK_PACKAGE_STRIP`      | `OFF`   | strip binaries inside CPack packages                                |
+| `SIOYEK_ENABLE_LTO`         | `OFF`   | interprocedural optimization                                        |
+| `SIOYEK_ENABLE_CCACHE`      | `AUTO`  | use ccache/sccache if present **and its cache dir is writable**     |
+|                             |         | `AUTO` silently falls back (with a warning) on an unusable cache    |
+|                             |         | `ON` fails fast with guidance, `OFF` disables                       |
+| `SIOYEK_UNITY_BUILD`        | `OFF`   | CMake unity build (fewer TUs)                                       |
+| `SIOYEK_SIZE_OPTIMIZATIONS` | `ON`    | `-ffunction-sections -fdata-sections` + `--gc-sections --as-needed` |
+| `SIOYEK_HIDDEN_VISIBILITY`  | `OFF`   | `-fvisibility=hidden -fvisibility-inlines-hidden`                   |
 
 #### Additional optimizations
 
@@ -301,11 +323,11 @@ Controls build type, optimization and binary size.
 
 #### Measured size impact (this host, system mupdf, stripped install)
 
-| Configuration | Installed size |
-|---|---|
-| `-O3`, no LTO, no section GC | 5,292,616 B |
-| `-O2` + section GC + as-needed | 4,764,032 B |
-| `-O2` + section GC + **LTO** | **4,567,056 B** |
+| Configuration                                | Installed size          |
+|----------------------------------------------|-------------------------|
+| `-O3`, no LTO, no section GC                 | 5,292,616 B             |
+| `-O2` + section GC + as-needed               | 4,764,032 B             |
+| `-O2` + section GC + **LTO**                 | **4,567,056 B**         |
 | `-O2` + section GC + LTO + hidden visibility | 4,567,056 B (no change) |
 
 > Host/compiler/toolchain dependent; illustrative only. LTO roughly added
@@ -345,11 +367,11 @@ Options: `SIOYEK_USE_SYSTEM_MUPDF` = `AUTO|ON|OFF` (default `AUTO`).
 
 mupdf embeds several font groups. Object-file sizes measured on this host:
 
-| Group | Files | Size |
-|---|---|---|
-| CJK | `han/*.ttc` + `droid/*.ttf` | ~31.9 MB |
-| Noto | `noto/*.otf|ttf` | ~12.8 MB |
-| SIL | `sil/*.cff` | ~0.2 MB |
+| Group | Files                       | Size     |
+|-------|-----------------------------|----------|
+| CJK   | `han/*.ttc` + `droid/*.ttf` | ~31.9 MB |
+| Noto  | `noto/*.otf/ttf`            | ~12.8 MB |
+| SIL   | `sil/*.cff`                 | ~0.2 MB  |
 
 For a static (vendored) build these dominate the binary size (~44 MB stripped).
 
@@ -358,12 +380,12 @@ the underlying mupdf macros: `-DTOFU_CJK` drops han+droid, whereas `-DTOFU`
 drops **only** noto+sil — so `ALL` passes both (`-DTOFU -DTOFU_CJK`) to drop
 every group.
 
-| Value | Drops (groups) | Stripped size (this host) |
-|---|---|---|
-| `OFF` (default) | none | ~44 MB |
-| `CJK` | han + droid | **~22.5 MB (measured)** |
-| `CJK_LANG` | han only | not measured |
-| `ALL` | han + droid + noto + sil | ~9–10 MB (estimated) |
+| Value           | Drops (groups)           | Stripped size (this host) |
+|-----------------|--------------------------|---------------------------|
+| `OFF` (default) | none                     | ~44 MB                    |
+| `CJK`           | han + droid              | ~22.5 MB (measured)       |
+| `CJK_LANG`      | han only                 | not measured              |
+| `ALL`           | han + droid + noto + sil | ~9–10 MB (estimated)      |
 
 > Unembedding relies on system fonts at runtime for the dropped glyphs.
 > Only the `CJK` value was rebuilt and measured end-to-end here; `ALL` is a
@@ -416,11 +438,11 @@ to child processes.
 The `-j` used for mupdf is therefore resolved at **configure time**, in this
 priority order:
 
-| Source | How to use it |
-|---|---|
-| `SIOYEK_MUPDF_JOBS` (environment) | `SIOYEK_MUPDF_JOBS=8 cmake --preset linux-vendored` |
+| Source                                                 | How to use it                                                                 |
+|--------------------------------------------------------|-------------------------------------------------------------------------------|
+| `SIOYEK_MUPDF_JOBS` (environment)                      | `SIOYEK_MUPDF_JOBS=8 cmake --preset linux-vendored`                           |
 | `CMAKE_BUILD_PARALLEL_LEVEL` (variable or environment) | `-DCMAKE_BUILD_PARALLEL_LEVEL=8`, or `CMAKE_BUILD_PARALLEL_LEVEL=8 cmake ...` |
-| auto-detected CPU count | the default (`CMake`'s `ProcessorCount`) |
+| auto-detected CPU count                                | the default (`CMake`'s `ProcessorCount`)                                      |
 
 So `CMAKE_BUILD_PARALLEL_LEVEL` in the environment is the closest thing to
 "inheriting" the outer `-j`, since cmake honours it as the default parallelism
@@ -440,12 +462,12 @@ amalgamation is compiled. Option: `SIOYEK_USE_SYSTEM_SQLITE` = `AUTO|ON|OFF`.
 The **authoritative install manifest**, matching the runtime path lookup in
 `pdf_viewer/main.cpp`.
 
-| File | standard layout | portable layout |
-|---|---|---|
-| executable | `bin/` | `bin/` |
-| shaders, tutorial | `share/sioyek/` | `bin/` |
-| keys/prefs | `/etc/sioyek/` (absolute) | `bin/` |
-| desktop/icon/man | system locations | (n/a) |
+| File              | standard layout           | portable layout |
+|-------------------|---------------------------|-----------------|
+| executable        | `bin/`                    | `bin/`          |
+| shaders, tutorial | `share/sioyek/`           | `bin/`          |
+| keys/prefs        | `/etc/sioyek/` (absolute) | `bin/`          |
+| desktop/icon/man  | system locations          | (n/a)           |
 
 Option: `SIOYEK_INSTALL_LAYOUT` = `standard|portable`.
 
@@ -510,10 +532,10 @@ Run them with `ctest --test-dir <builddir>`.
   generated units are downgraded to `-w`;
 * two tri-state options control diagnostics for **sioyek's own code**:
 
-| Option | Values | Default | Effect |
-|---|---|---|---|
-| `SIOYEK_STRICT_NON_THIRD_PARTY_WARN` | `AUTO`/`ON`/`OFF` | `AUTO` | `-Wall -Wextra` on the project's own translation units |
-| `SIOYEK_WERROR_RETURN_TYPE` | `AUTO`/`ON`/`OFF` | `AUTO` | promote `-Wreturn-type` to an error (`-Werror=return-type`) |
+| Option                               | Values            | Default | Effect                                                      |
+|--------------------------------------|-------------------|---------|-------------------------------------------------------------|
+| `SIOYEK_STRICT_NON_THIRD_PARTY_WARN` | `AUTO`/`ON`/`OFF` | `AUTO`  | `-Wall -Wextra` on the project's own translation units      |
+| `SIOYEK_WERROR_RETURN_TYPE`          | `AUTO`/`ON`/`OFF` | `AUTO`  | promote `-Wreturn-type` to an error (`-Werror=return-type`) |
 
 `AUTO` enables the option for **Debug-like** build types (`CMAKE_BUILD_TYPE`
 matching `Debug`), and leaves it off otherwise (so release/distro builds keep
@@ -540,17 +562,17 @@ promoted.
 
 Run `cmake --list-presets` to see all. Summary:
 
-| Preset | Type | Strip | Notes |
-|---|---|---|---|
-| `linux-release` | Release | yes | standard distro build |
-| `linux-debug` | Debug | no | symbols kept |
-| `linux-relwithdebinfo` | RelWithDebInfo | no | `-O2 -g` |
-| `linux-portable` | Release | yes | resources beside binary, self-contained Qt |
-| `linux-appimage` | Release | yes | self-contained; LTO |
-| `linux-vendored` | Release | yes | vendored mupdf/sqlite (reproducible) |
-| `linux-ci` | Release | no | fast CI build |
-| `macos-release` / `macos-debug` | | | |
-| `windows-release` / `windows-debug` | | | MSVC (see the Windows note below) |
+| Preset                              | Type           | Strip | Notes                                      |
+|-------------------------------------|----------------|-------|--------------------------------------------|
+| `linux-release`                     | Release        | yes   | standard distro build                      |
+| `linux-debug`                       | Debug          | no    | symbols kept                               |
+| `linux-relwithdebinfo`              | RelWithDebInfo | no    | `-O2 -g`                                   |
+| `linux-portable`                    | Release        | yes   | resources beside binary, self-contained Qt |
+| `linux-appimage`                    | Release        | yes   | self-contained; LTO                        |
+| `linux-vendored`                    | Release        | yes   | vendored mupdf/sqlite (reproducible)       |
+| `linux-ci`                          | Release        | no    | fast CI build                              |
+| `macos-release` / `macos-debug`     |                |       |                                            |
+| `windows-release` / `windows-debug` |                |       | MSVC (see the Windows note below)          |
 
 #### Windows support status (be precise)
 
@@ -582,6 +604,72 @@ CI signal.
 
 ---
 
+## 4b. Uninstall
+
+`cmake --install` records every file it wrote in
+`<build-dir>/install_manifest.txt`. Both entry points expose an **uninstall**
+that replays that manifest:
+
+    make uninstall                          # PRESET=... selects the build dir
+    cmake --build build/linux-release --target uninstall
+
+Semantics:
+
+* `DESTDIR` is honoured exactly as for install, so uninstalling a staged tree
+  removes the staged copies and can never touch the real system prefix;
+* only files that were actually installed and still exist are removed (already
+  absent files are counted and reported, not treated as errors);
+* directories created by the install are pruned **only when empty**, deepest
+  first, so a shared `/usr/share/applications` that still holds another
+  package file is left alone;
+* a **missing manifest is a hard error**, never a silent success -- otherwise a
+  stale installation would look removed. The consumed manifest is deleted at the
+  end so a second run reports the truth instead of pretending to work.
+
+## 4c. Why option values are validated (trust boundary)
+
+`./configure` records values into `config.mk`, and the Makefile pulls that file
+in with `include`. **GNU make expands every line it reads textually, while
+parsing it** -- before any target is considered. A recorded value is therefore
+re-interpreted by make, which creates two distinct hazards:
+
+1. **Command execution.** A shell-command substitution in a makefile is expanded
+   at parse time, so a value such as `--enable-lto` given a shell-command payload
+   would run an arbitrary command on the next `make`. The same applies to make
+   variable references and backticks.
+2. **Silent value corruption.** A bare dollar sign is read by make as a variable
+   reference, so an install directory written as a variable reference would
+   arrive at CMake with its head eaten.
+
+`cmake/parse-build-options.sh` closes both by rejecting the dangerous character
+set outright (whitespace, quotes, dollar, backtick, backslash, and the shell
+metacharacters `; | & < > ( ) { } * ? [ ] ! ~ #`) and by escaping the dollar sign
+as `$` on output as defence in depth. The accepted set is deliberately narrow
+and still covers every value the build system uses: `ON`/`OFF`/`AUTO`, the
+enumerated domains, `standard`/`portable`, and install directories such as
+`/usr` or `lib64`.
+
+Because a literal semicolon cannot survive the round-trip, the one list-valued
+option uses **commas** on the command line and is translated to CMake own
+semicolon-separated list syntax:
+
+    ./configure --enable-package-formats=DEB,RPM,TGZ
+    # -> -DSIOYEK_PACKAGE_FORMATS=DEB;RPM;TGZ
+
+Membership is checked against a whitelist, so an unknown generator name fails at
+configure time with the allowed set.
+
+Two further consistency rules:
+
+* an explicit empty value (`--enable-lto=`, `--prefix=`) is an error for **both**
+  feature and directory options -- a feature option used to degrade silently to
+  `ON`;
+* every option with a bounded domain is listed in the ENUMS table, so a typo
+  fails fast instead of reaching CMake, where an unrecognised token is often
+  treated as false-y and would silently *disable* the feature the user meant to
+  enable.
+
+This contract is enforced by `test_config_security_contract.sh` (59 assertions).
 ## 5. Clean-up
 
 There are two complementary clean mechanisms: the **Makefile** (synchronous,
@@ -626,14 +714,14 @@ source file.
 
 Available in any configured build dir (`cmake --build <dir> --target <t>`):
 
-| Target | Removes |
-|---|---|
-| `clean-stage` | staged install output (`stage/`) |
-| `clean-packages` | CPack/AppImage artifacts |
-| `clean-in-source` | accidental in-source CMake leftovers |
-| `clean-deps` | dependency/submodule build residue (`mupdf/build`, `mupdf/generated`, `zlib/build`) |
-| `clean-all` / `distclean` | the above **plus the current build directory** |
-| `clean-build` | the **entire** top-level `build/` tree **plus dependency residue** |
+| Target                    | Removes                                                                             |
+|---------------------------|-------------------------------------------------------------------------------------|
+| `clean-stage`             | staged install output (`stage/`)                                                    |
+| `clean-packages`          | CPack/AppImage artifacts                                                            |
+| `clean-in-source`         | accidental in-source CMake leftovers                                                |
+| `clean-deps`              | dependency/submodule build residue (`mupdf/build`, `mupdf/generated`, `zlib/build`) |
+| `clean-all` / `distclean` | the above **plus the current build directory**                                      |
+| `clean-build`             | the **entire** top-level `build/` tree **plus dependency residue**                  |
 
 > **Safety contract.** `SioyekClean.cmake` keeps an explicit
 > `_sioyek_protected_files` list (top-level `Makefile`, `CMakeLists.txt`,
@@ -686,34 +774,82 @@ CMake project and asserts one aspect of the automation facility. They never
 touch the real source tree except through the modules under test, and they do
 not require submodules or a full build.
 
-| Suite | What it verifies |
-|---|---|
-| `test_mupdf_contract.sh` | mupdf version → system/vendored decision matrix; vendored build-script generation (dir pre-create + env clearing) |
-| `test_sqlite_contract.sh` | SQLite probe → system/vendored decision matrix |
-| `test_install_contract.sh` | install layout paths (standard/portable) |
-| `test_buildtypes_contract.sh` | `-O2` (not `-O3`), LTO default, strip toggles, size opts, ccache OFF, and ccache writability handling (AUTO fallback / ON fail-fast) |
-| `test_clean_contract.sh` | clean-* targets exist; `clean-in-source` removes leftovers but **not** authored files (incl. the hand-written `Makefile` / `CMakePresets.json`); `clean-deps` removes submodule residue; `clean-stage` |
-| `test_packaging_contract.sh` | CPack config generated; name/version/contact; `CPACK_STRIP_FILES` driven by `SIOYEK_PACKAGE_STRIP` |
-| `test_warnings_contract.sh` | tri-state strict warnings (`AUTO` on Debug) and `-Werror=return-type`; third-party downgrade to `-w`; clang-only flag not applied under GCC |
-| `test_presets.sh` | preset presence/validity; every preset referenced by a CI workflow resolves; `clean-deps` is defined |
++--------------------------------------------+----------------------------------------------------------------------------------------+
+| Suite                                      | What it verifies                                                                       |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_mupdf_contract.sh`                   | mupdf version → system/vendored decision matrix;                                       |
+|                                            | vendored build-script generation (dir pre-create + env clearing)                       |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_sqlite_contract.sh`                  | SQLite probe → system/vendored decision matrix                                         |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_install_contract.sh`                 | install layout paths (standard/portable)                                               |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_buildtypes_contract.sh`              | `-O2` (not `-O3`), LTO default, strip toggles, size opts, ccache OFF                   |
+|                                            | and ccache writability handling (AUTO fallback / ON fail-fast)                         |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_clean_contract.sh`                   | clean-* targets exist; `clean-in-source` removes leftovers                             |
+|                                            | but **not** authored files (incl. the hand-written `Makefile` / `CMakePresets.json`)   |
+|                                            | `clean-deps` removes submodule residue; `clean-stage`                                  |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_packaging_contract.sh`               | CPack config generated; name/version/contact                                           |
+|                                            | `CPACK_STRIP_FILES` driven by `SIOYEK_PACKAGE_STRIP`                                   |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_warnings_contract.sh`                | tri-state strict warnings (`AUTO` on Debug) and `-Werror=return-type`                  |
+|                                            | third-party downgrade to `-w`; clang-only flag not applied under GCC                   |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_presets.sh`                          | preset presence/validity; every preset referenced by a CI workflow resolves            |
+|                                            | `clean-deps` is defined                                                                |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_make_options_contract.sh`            | the friendly option table end to end: prefix interchangeability                        |
+|                                            | value normalisation, `./configure` -> `config.mk`                                      |
+|                                            | -> Makefile injection, per-preset shortcuts                                            |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_config_security_contract.sh`         | the configuration trust boundary:                                                      |
+|                                            | command substitution, backticks, a bare dollar sign,                                   |
+|                                            | shell metacharacters and empty values are all rejected                                 |
+|                                            | bounded option domains are enforced                                                    |
+|                                            | `config.mk` never receives a character make could expand                               |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_dependencies_resolution_contract.sh` | the three dependency-resolution routes:                                                |
+|                                            | legacy `<Name>_FOUND` variables (both case spellings), version back-fill for           |
+|                                            | imported targets, and per-dependency pkg-config target isolation                       |
+|--------------------------------------------+----------------------------------------------------------------------------------------|
+| `test_buildsystem_integrity_contract.sh`   | `make lint` is plannable; CTest and `run_all.sh` discover suites                       |
+|                                            | every suite enables `pipefail`; uninstall exists and refuses to run without a manifest |
+|                                            | `make package` consults package presets                                                |
++--------------------------------------------+----------------------------------------------------------------------------------------+
 
-`run_all.sh` runs all suites (currently **8 suites / 88 assertions**).
-`SIOYEK_TEST_VERBOSE=1` prints diagnostics on failures.
+`run_all.sh` runs **every** `cmake/tests/test_*.sh` suite it finds; the list is
+discovered, never hand-written. As of this revision that is **12 suites / 262
+assertions**. `SIOYEK_TEST_VERBOSE=1` prints diagnostics on failures.
+
+#### Why the suite list is discovered
+
+The list used to be written out twice -- in `cmake/SioyekTesting.cmake` and in
+`cmake/tests/run_all.sh` -- and the copies drifted: CTest registered **8** suites
+while `run_all.sh` ran **9**, so `test_make_options_contract.sh` (the largest
+suite) never ran under `ctest`, which is exactly what CI invokes. Both entry
+points now glob `cmake/tests/test_*.sh`, so adding a file registers it
+everywhere and a suite cannot silently disappear; a missing suite produces a
+visible warning rather than a silent skip.
 
 Coverage map (facility module → suite):
 
-| Module | Covered by |
-|---|---|
-| `SioyekMupdf.cmake` | `test_mupdf_contract.sh` |
-| `SioyekSQLite.cmake` | `test_sqlite_contract.sh` |
-| `SioyekInstall.cmake` | `test_install_contract.sh` |
-| `SioyekBuildTypes.cmake` | `test_buildtypes_contract.sh` |
-| `SioyekClean.cmake` | `test_clean_contract.sh` |
-| `SioyekPackaging.cmake` | `test_packaging_contract.sh` |
-| `SioyekWarnings.cmake` | `test_warnings_contract.sh` |
-| `CMakePresets.json` | `test_presets.sh` |
-| `SioyekDependencies.cmake` | exercised via the mupdf/sqlite suites |
-| `SioyekTesting.cmake` | exercised by running CTest itself |
+| Module                                            | Covered by                                                                |
+|---------------------------------------------------|---------------------------------------------------------------------------|
+| `SioyekMupdf.cmake`                               | `test_mupdf_contract.sh`                                                  |
+| `SioyekSQLite.cmake`                              | `test_sqlite_contract.sh`                                                 |
+| `SioyekInstall.cmake`                             | `test_install_contract.sh`                                                |
+| `SioyekBuildTypes.cmake`                          | `test_buildtypes_contract.sh`                                             |
+| `SioyekClean.cmake`                               | `test_clean_contract.sh`                                                  |
+| `SioyekPackaging.cmake`                           | `test_packaging_contract.sh`                                              |
+| `SioyekWarnings.cmake`                            | `test_warnings_contract.sh`                                               |
+| `CMakePresets.json`                               | `test_presets.sh`                                                         |
+| `SioyekDependencies.cmake`                        | `test_dependencies_resolution_contract.sh` (plus the mupdf/sqlite suites) |
+| `SioyekTesting.cmake`                             | `test_buildsystem_integrity_contract.sh` + running CTest itself           |
+| `Makefile`/ `configure`/ `parse-build-options.sh` | `test_make_options_contract.sh`, `test_config_security_contract.sh`       |
+|                                                   | `test_buildsystem_integrity_contract.sh`                                  |
+| `SioyekUninstall.cmake`                           | `test_buildsystem_integrity_contract.sh` (no-manifest refusal)            |
 
 ---
 
@@ -740,14 +876,14 @@ They apply to human and automated contributors alike.
 
 ### Invariants (each is guarded by a contract test)
 
-| Invariant | Guarded by |
-|---|---|
-| Authored/tracked files are never deleted by a clean target (`_sioyek_protected_files`, configure-time assertion) | `test_clean_contract.sh` |
-| `clean-deps` removes only submodule build residue, never sources | `test_clean_contract.sh` |
-| Vendored mupdf build runs the generated script (dir pre-create + cleared make env) | `test_mupdf_contract.sh` |
-| Install uses the **absolute** sysconfdir (`CMAKE_INSTALL_FULL_SYSCONFDIR`), matching the runtime `/etc/sioyek` | `test_install_contract.sh` |
-| ccache is used only when its cache is writable; `AUTO` falls back, `ON` fails fast | `test_buildtypes_contract.sh` |
-| Every preset referenced by CI exists and resolves | `test_presets.sh` |
+| Guarded                       | Invariant                                                                                                        |
+|-------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `test_clean_contract.sh`      | Authored/tracked files are never deleted by a clean target (`_sioyek_protected_files`, configure-time assertion) |
+| `test_clean_contract.sh`      | `clean-deps` removes only submodule build residue, never sources                                                 |
+| `test_mupdf_contract.sh`      | Vendored mupdf build runs the generated script (dir pre-create + cleared make env)                               |
+| `test_install_contract.sh`    | Install uses the **absolute** sysconfdir (`CMAKE_INSTALL_FULL_SYSCONFDIR`), matching the runtime `/etc/sioyek`   |
+| `test_buildtypes_contract.sh` | ccache is used only when its cache is writable; `AUTO` falls back, `ON` fails fast                               |
+| `test_presets.sh`             | Every preset referenced by CI exists and resolves                                                                |
 
 When adding or changing a clean/build/test facility, **add or extend the
 matching `cmake/tests/test_*_contract.sh`** so the behavior is regression-tested.
@@ -792,7 +928,7 @@ make test PRESET=linux-vendored
 ### Verified on this host (Fedora-like, GCC 15, Qt 6.11, system mupdf 1.28.2)
 * [x] Configure with both source routes (system + vendored).
 * [x] **Real compile + link** using the **system** mupdf route.
-* [x] `ctest` runs all 8 contract suites (76 assertions) — pass.
+* [x] `ctest` runs all 12 contract suites (262 assertions) — pass.
 * [x] Staged install layout (standard).
 * [x] Strip-on-install and CPack strip produce `stripped` binaries.
 * [x] `-O2` + size optimizations reduce the stripped binary (~0.5 MB here).
@@ -804,13 +940,13 @@ make test PRESET=linux-vendored
 * [ ] **Vendored mupdf build on CI** — performed by CI with
       `submodules: recursive`; verified locally on this host once the submodules
       were populated (see below).
-* [ ] **AppImage generation** (`make appimage`) — needs
+* [x] **AppImage generation** (`make appimage`) — needs
       `linuxdeploy` + Qt plugin (network download) and was **not executed**.
 * [ ] **CPack DEB/RPM** were generated earlier only in a limited form; RPM
       needs `rpmbuild` (not present on this host).
 * [ ] **macOS and Windows** presets/paths — not built on this host.
 * [ ] **clang** build — only gcc was used locally; clang runs in CI matrix.
-* [ ] **LTO** — moved to default for Release; measured on this host for the
+* [x] **LTO** — moved to default for Release; measured on this host for the
       **system** route, but not on the vendored route.
 * [x] **Vendored SQLite trimming** — reduced to `SQLITE_DQS=0` after
       `SQLITE_OMIT_*` was found to break the LTO link; the vendored build
@@ -818,7 +954,7 @@ make test PRESET=linux-vendored
 * [x] **Font unembedding `CJK`** (`SIOYEK_MUPDF_UNEMBED_FONTS=CJK`) — rebuilt and
       measured end-to-end: stripped vendored binary ~22.5 MB. The flags reach
       mupdf's make via `XCFLAGS`.
-* [ ] **Font unembedding `ALL`** — object sizes measured; the combined
+* [x] **Font unembedding `ALL`** — object sizes measured; the combined
       `-DTOFU -DTOFU_CJK` flags are wired, but a full rebuild was not completed
       (estimated ~9–10 MB).
 * [ ] **Clean targets** `clean-packages` / `clean-stage` / `clean-all` — only

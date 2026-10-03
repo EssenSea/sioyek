@@ -69,19 +69,26 @@ set(SIOYEK_LINUXDEPLOY_QT_URL
 # mismatch aborts the build instead of executing the wrong binary.
 #
 # HOW TO (RE)DERIVE THESE VALUES when bumping the pin above:
+#
 #   curl -sL -o /tmp/ld   <SIOYEK_LINUXDEPLOY_URL>    && sha256sum /tmp/ld
 #   curl -sL -o /tmp/ldqt <SIOYEK_LINUXDEPLOY_QT_URL> && sha256sum /tmp/ldqt
-# Derive them from an INDEPENDENT download (a different machine or network)
-# and confirm both agree, then cross-check against the upstream release notes
-# if any are published. The value recorded here was derived from a completed
-# download whose hash was stable across repeated reads and whose payload is a
-# valid ELF executable; it has NOT been cross-checked against an upstream-
-# published digest, because linuxdeploy publishes none for these assets.
-# Treat it as TOFU (trust-on-first-use): it pins the bytes you have reviewed,
-# and it will catch any later substitution, but it cannot by itself prove that
-# the first download was not already malicious.
+#
+# CRITICAL: verify the download COMPLETED before hashing. A truncated file still
+# produces a well-formed sha256sum, so an interrupted download yields a hash that
+# looks perfectly normal and is simply wrong. Check the byte size against the
+# upstream asset listing (or download twice and compare) -- this is exactly how a
+# wrong value was recorded here once, which would have made every AppImage build
+# fail at the integrity check with no obvious cause. Re-derive from an
+# INDEPENDENT download and confirm both agree.
+#
+# The values below were each derived from a COMPLETED download, verified twice
+# (two independent downloads producing byte-identical files of the expected
+# size). linuxdeploy publishes no upstream digest for these assets, so this is
+# still TOFU (trust-on-first-use): it pins the bytes that were reviewed and will
+# catch any later substitution, but it cannot by itself prove that the first
+# download was not already malicious.
 set(SIOYEK_LINUXDEPLOY_SHA256
-    "33af59b89032b5a01ac6e7bcd9d0d91fbc0f8135af17350f9d6c1d680bb23dcd"
+    "c86d6540f1df31061f02f539a2d3445f8d7f85cc3994eee1e74cd1ac97b76df0"
     CACHE STRING "Expected SHA-256 of the linuxdeploy AppImage (REQUIRED when SIOYEK_BUILD_APPIMAGE=ON).")
 set(SIOYEK_LINUXDEPLOY_QT_SHA256
     "f53349093d333a6558c560844c1a0f64a3b6bd077bf02740af3ad3dbb8827433"
