@@ -41,6 +41,11 @@ name: CMake Build & Contract Tests
 #     dynamically so it validates the diagnostic, not a specific VS version.
 # ---------------------------------------------------------------------------
 
+# Least privilege (OpenSSF Scorecard: Token-Permissions). This workflow
+# only reads the repository, builds and tests; it never publishes.
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -63,7 +68,7 @@ jobs:
   contract-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install test dependencies
         run: |
@@ -72,7 +77,7 @@ jobs:
             libharfbuzz-dev libsqlite3-dev zlib1g-dev
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
         with:
           version: '6.7.2'
           modules: 'all'
@@ -129,7 +134,7 @@ jobs:
       CC: ${{ matrix.compiler.cc }}
       CXX: ${{ matrix.compiler.cxx }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: recursive
 
@@ -145,7 +150,7 @@ jobs:
           fi
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
         with:
           version: '6.7.2'
           modules: 'all'
@@ -219,7 +224,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: recursive
 

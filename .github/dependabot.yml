@@ -1,0 +1,60 @@
+# Dependabot configuration.
+#
+# WHY THIS EXISTS
+# ---------------
+# Every GitHub Action in this repository is now pinned to a full commit SHA
+# (OpenSSF Scorecard: Pinned-Dependencies). A SHA pin is immutable, which is
+# exactly what makes it secure -- and also what makes it go stale: no upstream
+# fix reaches this repository unless something updates the pin deliberately.
+# Dependabot is that something. It keeps the pins fresh while preserving the
+# property that nothing changes without a reviewed pull request, so pinning does
+# not quietly turn into "freeze on an ancient, unpatched revision".
+#
+# The dependency ecosystems actually present in this repository:
+#   * github-actions -- the workflows under .github/workflows/
+#   * gitsubmodule   -- mupdf/ and zlib/, which are git submodules
+#   * pip            -- the helper scripts under scripts/ (no manifest yet, so
+#                       this entry is intentionally omitted rather than added
+#                       blind; add it if a requirements*.txt ever appears)
+#
+# Deliberately NOT configured: Docker (no images built here).
+version: 2
+updates:
+  # --- GitHub Actions -------------------------------------------------------
+  # Dependabot understands SHA pins and will rewrite them together with the
+  # trailing "# vX" comment, so the human-readable version stays accurate.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "ci"
+    groups:
+      # One PR for the routine bumps instead of a dozen. Actions that are
+      # released in lockstep (the actions/* family) are the common case.
+      github-actions:
+        patterns:
+          - "actions/*"
+
+  # --- Git submodules -------------------------------------------------------
+  # mupdf is the dependency with real ABI coupling -- sioyek reads its public
+  # struct fields directly -- so a bump is never routine. The SIOYEK_MUPDF_*
+  # verified range in cmake/SioyekMupdf.cmake must be revisited in the same PR;
+  # the vendored-version check warns at configure time when it is not.
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "mupdf"

@@ -1,6 +1,12 @@
 
 name: Preview Release
 
+# Least privilege by default (OpenSSF Scorecard: Token-Permissions).
+# The publishing job below opts into contents:write; every build job only
+# needs to read the repository and its submodules.
+permissions:
+  contents: read
+
 on:
   push:
     tags:
@@ -17,11 +23,14 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [build-mac, build-mac-arm, build-linux, build-windows]
 
+    # Required to create the release and upload its assets.
+    permissions:
+      contents: write
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: create release
       id: create_release
-      uses: actions/create-release@v1
+      uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
       with:
@@ -30,12 +39,12 @@ jobs:
         draft: false
         prerelease: true
     - name: download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
       # with:
       #   name: uploads     
     - name: upload mac
       id: upload-mac
-      uses: actions/upload-release-asset@v1.0.1
+      uses: actions/upload-release-asset@64e5e85fc528f162d7ba7ce2d15a3bb67efb3d80 # v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -46,7 +55,7 @@ jobs:
 
     - name: upload mac arm
       id: upload-mac-arm
-      uses: actions/upload-release-asset@v1.0.1
+      uses: actions/upload-release-asset@64e5e85fc528f162d7ba7ce2d15a3bb67efb3d80 # v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -57,7 +66,7 @@ jobs:
 
     - name: upload linux
       id: upload-linux
-      uses: actions/upload-release-asset@v1.0.1
+      uses: actions/upload-release-asset@64e5e85fc528f162d7ba7ce2d15a3bb67efb3d80 # v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -67,7 +76,7 @@ jobs:
         asset_content_type: application/zip   
     - name: upload windows
       id: upload-windows
-      uses: actions/upload-release-asset@v1.0.1
+      uses: actions/upload-release-asset@64e5e85fc528f162d7ba7ce2d15a3bb67efb3d80 # v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -82,7 +91,7 @@ jobs:
 
     steps:
     - name: Cache apt-get packages
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       env:
         cache-name: cache-deb-packages
       with:
@@ -94,17 +103,17 @@ jobs:
           ${{ runner.os }}-
 
     - name: Install LinuxDeploy
-      uses: miurahr/install-linuxdeploy-action@v1
+      uses: miurahr/install-linuxdeploy-action@c776300d621bfc9510fc400abf5dff5fa728ac14 # v1
       with:
         plugins: qt appimage
 
     - name: Set up GCC
-      uses: egor-tensin/setup-gcc@v1
+      uses: egor-tensin/setup-gcc@eaa888eb19115a521fa72b65cd94fe1f25bbcaac # v1
       with:
         version: 9
         platform: x64
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
             submodules: 'recursive'
             ref: development
@@ -113,7 +122,7 @@ jobs:
       run: sudo apt install libharfbuzz-dev libxrandr-dev libxi-dev libglu1-mesa-dev fuse libxcb-cursor0 libspeechd2
       
     - name: Install Qt
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         version: '6.7.2'
         modules: 'all'
@@ -127,7 +136,7 @@ jobs:
         CC:   gcc-9
         CXX:  g++-9
     - name: upload linux artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: linux-uploads
         path: sioyek-release-linux.zip
@@ -141,23 +150,23 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
             submodules: 'recursive'
             ref: development
     
     - name: Install Qt
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         version: '6.7.2'
         modules: 'all'
         cache: true
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1.0.2
+      uses: microsoft/setup-msbuild@c26a08ba26249b81327e26f6ef381897b6a8754d # v1.0.2
 
     - name: Add msvc-dev-cmd
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
       
       
     - name: Build Sioyek
@@ -165,7 +174,7 @@ jobs:
       run: .\build_windows.bat non_portable
       
     - name: upload windows artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: windows-uploads
         path: sioyek-release-windows.zip
@@ -176,13 +185,13 @@ jobs:
 
     steps:
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
             submodules: 'recursive'
             ref: development
 
     - name: Cache Homebrew packages
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       env:
         cache-name: homebrew
       with:
@@ -197,7 +206,7 @@ jobs:
       run:  brew install freeglut mesa harfbuzz 
       
     - name: Install Qt
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         version: '6.7.2'
         modules: 'all'
@@ -210,7 +219,7 @@ jobs:
         MAKE_PARALLEL=$(sysctl -n hw.logicalcpu) ./build_mac.sh
         
     - name: upload mac artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: mac-uploads
         path: sioyek-release-mac.zip
@@ -221,13 +230,13 @@ jobs:
 
     steps:
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
             submodules: 'recursive'
             ref: development
 
     - name: Cache Homebrew packages
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       env:
         cache-name: homebrew
       with:
@@ -242,7 +251,7 @@ jobs:
       run:  brew install freeglut mesa harfbuzz 
       
     - name: Install Qt
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         version: '6.7.2'
         modules: 'all'
@@ -256,7 +265,7 @@ jobs:
         mv sioyek-release-mac.zip sioyek-release-mac-arm.zip
         
     - name: upload mac artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: mac-arm-uploads
         path: sioyek-release-mac-arm.zip
