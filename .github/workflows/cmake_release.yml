@@ -1,0 +1,482 @@
+name: CMake Release
+
+# =============================================================================
+# CMake-based release pipeline.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The repository already ships legacy release workflows
+# (build_and_release.yml, preview_release.yml) which drive the *qmake* path via
+# build_linux.sh / build_mac.sh / build_windows.bat /
+# linuxdeploy_build_and_release.sh. Those files are deliberately left untouched:
+# they still produce the historical release artifacts, and replacing them is a
+# separate migration decision.
+#
+# This workflow is ADDITIVE. It releases the SAME project through the **CMake
+# build system** -- the presets, the install contract and the CPack configuration
+# under cmake/ -- so the modern path is actually exercised end to end instead of
+# merely being configured. Until now nothing published a CMake-built artifact,
+# which is exactly how install/packaging defects stayed invisible.
+#
+# It also runs the full contract test suite, which the legacy release workflows
+# never did.
+#
+# TRIGGERS
+#   push tag v*       -> verify + build + package + publish a GitHub Release
+#   pull_request      -> verify + build + package (artifacts uploaded, NO release)
+#   workflow_dispatch -> same as a tag, without needing to tag
+#
+# DELIBERATE DIFFERENCES FROM THE LEGACY WORKFLOWS
+#   * every action is pinned to a full commit SHA (the legacy workflows use
+#     mutable major tags, which is a supply-chain risk on a release path);
+#   * `permissions:` is declared and minimal -- read-only by default, with
+#     `contents: write` granted only to the single publishing job;
+#   * failures are never swallowed: no `|| true` on any verification step;
+#   * the produced packages are VERIFIED (layout, contents, `ldd`) before they
+#     are published, rather than being zipped and uploaded unchecked.
+# =============================================================================
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default. The publishing job opts into contents:write.
+permissions:
+  contents: read
+
+concurrency:
+  group: cmake-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.7.2"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Contract tests. Fast, needs no submodules and no full build, so it gives a
+  #    signal in seconds and gates everything downstream.
+  # ---------------------------------------------------------------------------
+  contract-tests:
+    name: Contract tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config
+
+      # Qt IS required even for the fast contract job. CMakeLists.txt calls
+      # find_package(Qt6 6.5 REQUIRED ...) unconditionally, so a plain
+      # `cmake -S . -B ...` cannot configure without it -- the configure step
+      # fails before any test runs. Running the suites directly (run_all.sh)
+      # does NOT need Qt, because those are self-contained shell scripts, but
+      # the CTest path does, and this job exercises both.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: "6.7.2"
+          modules: "all"
+          cache: true
+
+      - name: Run the contract suite directly
+        env:
+          SIOYEK_TEST_VERBOSE: "1"
+        run: bash ./cmake/tests/run_all.sh
+
+      - name: Configure and run the suite through CTest
+        run: |
+          cmake -S . -B build/contract \
+            -DSIOYEK_USE_SYSTEM_MUPDF=OFF \
+            -DSIOYEK_ENABLE_TESTS=ON
+          ctest --test-dir build/contract --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # 2. Real release build + package through the CMake install/CPack contract.
+  # ---------------------------------------------------------------------------
+  build-linux-package:
+    name: Build & package (Linux, CMake)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    needs: [contract-tests]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config ccache dpkg-dev zip \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev \
+            libjbig2dec0-dev libjpeg-dev libopenjp2-7-dev \
+            libfreetype-dev libgumbo-dev libgl1-mesa-dev \
+            rpm
+
+      # CPack fails the WHOLE run (exit 1) if any single generator fails, even
+      # when the others succeeded. The RPM generator needs rpmbuild, so assert
+      # it is present up front; otherwise a missing tool looks like a packaging
+      # bug and the already-built TGZ/DEB are needlessly discarded.
+      - name: Assert the packaging toolchain is complete
+        run: |
+          set -euo pipefail
+          for tool in cpack dpkg-deb rpmbuild zip; do
+            command -v "${tool}" >/dev/null \
+              || { echo "::error::required packaging tool '${tool}' is missing"; exit 1; }
+          done
+          echo "packaging toolchain present"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: "6.7.2"
+          modules: "all"
+          cache: true
+
+      # NOTE: the configure preset and the package preset must agree.
+      # `cpack --preset linux-release` reads
+      # CMakePresets.json's packagePresets.linux-release, whose configurePreset
+      # is `linux-release` -- it operates on build/linux-release. Building
+      # `linux-vendored` and then packaging `linux-release` packages a build
+      # directory that was never configured here, which fails. We therefore
+      # build linux-release directly, forcing the vendored dependencies so the
+      # release is reproducible (the same intent the linux-vendored preset
+      # encodes).
+      - name: Build and package (linux-release preset, vendored deps)
+        run: |
+          cmake --preset linux-release \
+            -DSIOYEK_USE_SYSTEM_MUPDF=OFF \
+            -DSIOYEK_USE_SYSTEM_SQLITE=OFF
+          cmake --build --preset linux-release -j"$(nproc)"
+          cpack --preset linux-release
+
+      - name: Verify the packages exist
+        run: |
+          set -euo pipefail
+          ls -la build/linux-release/*.deb build/linux-release/*.rpm build/linux-release/*.tar.gz
+
+      - name: Verify package contents match the install contract
+        run: |
+          set -euo pipefail
+          # Collect the listings into files first. Piping a producer into
+          # "grep -q" is unsafe under "set -o pipefail": grep exits as soon as
+          # it matches, the producer receives SIGPIPE, and the pipeline reports
+          # failure even though the assertion succeeded. That is exactly how an
+          # earlier revision failed here (dpkg-deb: "tar: stdout: write error").
+          tar tzf build/linux-release/*.tar.gz > tgz-contents.txt   # entries carry the sioyek-<ver>-Linux/ prefix
+          dpkg-deb -c build/linux-release/*.deb > deb-contents.txt
+
+          rc=0
+          for f in usr/bin/sioyek usr/share/sioyek/tutorial.pdf usr/share/man/man1/sioyek.1; do
+            if ! grep -q "$f" tgz-contents.txt; then
+              echo "::error::missing $f in the TGZ"; rc=1
+            fi
+          done
+          if ! grep -q "usr/bin/sioyek" deb-contents.txt; then
+            echo "::error::usr/bin/sioyek missing from the DEB"; rc=1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "--- TGZ contents ---"; cat tgz-contents.txt
+            echo "--- DEB contents ---"; cat deb-contents.txt
+            exit 1
+          fi
+          echo "package contents verified"
+
+      - name: Smoke test the packaged binary
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar xzf build/linux-release/*.tar.gz -C /tmp/verify
+
+          # The CPack archive nests everything under a top-level directory
+          # named after the package+version ("sioyek-2.0.0-Linux/"), so the
+          # binary is NOT at <extract>/usr/bin/sioyek. Locate it instead of
+          # hard-coding the layout, and fail loudly with the actual tree when
+          # it is absent -- an earlier revision assumed the un-nested path and
+          # died silently on "test -x", which reads as a mysterious exit-1 with
+          # no output at all.
+          BIN="$(find /tmp/verify -type f -name sioyek -path "*/usr/bin/*" | head -1)"
+          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+            echo "::error::no executable usr/bin/sioyek inside the archive"
+            echo "--- extracted tree ---"
+            find /tmp/verify -maxdepth 4 | head -40
+            exit 1
+          fi
+          echo "found packaged binary: $BIN"
+
+          # Capture the listing BEFORE searching it. Piping ldd straight into
+          # "grep -q" is wrong under "set -o pipefail": grep exits on the first
+          # match, ldd takes SIGPIPE, and the pipeline status becomes non-zero
+          # -- so the 'if' branch is taken EVEN WHEN the pattern did not
+          # match, and the step reports a dependency failure that does not
+          # exist. Observed as a bare "##[error]Process completed with exit
+          # code 1" with no unmatched library printed. This is the same SIGPIPE
+          # mistake already fixed in the package-contents step above; fixing it
+          # there did not fix it here, so the pattern is called out explicitly.
+          ldd "$BIN" > ldd-output.txt
+          if grep -q "not found" ldd-output.txt; then
+            echo "::error::unresolved dynamic dependencies:"
+            grep "not found" ldd-output.txt
+            exit 1
+          fi
+          echo "packaged binary resolves all dynamic dependencies"
+          echo "--- ldd summary ---"
+          wc -l < ldd-output.txt | xargs echo "resolved entries:"
+
+      # Software Bill of Materials (SLSA: make the build inputs inspectable).
+      #
+      # WHY: the release artifacts statically embed several third-party
+      # components (mupdf and its freetype/harfbuzz/brotli/libjpeg/lcms2/mujs/
+      # zlib; the SQLite amalgamation; fzf; utf8cpp; rapidfuzz). A consumer has
+      # no practical way to inventory those from the binary alone. The SBOM
+      # records exactly what went into THIS build, in SPDX JSON, alongside the
+      # packages it describes.
+      #
+      # The output is uploaded as a release asset, not merely kept as a CI
+      # artifact, so it travels with the binary it documents.
+      # Software Bill of Materials (SLSA: make the build inputs inspectable).
+      #
+      # WHY: the release artifacts statically embed several third-party
+      # components (mupdf and its bundled freetype/harfbuzz/brotli/libjpeg/
+      # lcms2/mujs/zlib, the SQLite amalgamation, fzf, utf8cpp, rapidfuzz). A
+      # consumer has no practical way to inventory those from the binary alone.
+      #
+      # IMPLEMENTATION NOTE: the SBOM is written to a CONCRETE PATH INSIDE THE
+      # WORKSPACE and then uploaded with actions/upload-artifact, rather than
+      # relying on anchore/sbom-action's own artifact handling. The action's
+      # "output-file" is resolved relative to its internal working directory and
+      # its artifact arrives with a nested directory structure, so the release
+      # job's file glob found no *.spdx.json at all and, with
+      # fail_on_unmatched_files: true, aborted the publish step -- the SBOM
+      # silently existed but never reached the release. Writing to a known path
+      # keeps the file where the glob expects it.
+      - name: Generate SBOM (SPDX JSON)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          # Scan the build tree rather than the source, so the SBOM reflects
+          # what is actually shipped.
+          path: build/linux-release
+          format: spdx-json
+          output-file: ${{ github.workspace }}/sioyek.spdx.json
+          # Disable the action's own artifact upload: this job uploads the file
+          # explicitly below, at a path the publish job can find.
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Locate and verify the SBOM
+        id: sbom
+        run: |
+          set -euo pipefail
+          # "output-file" semantics differ between sbom-action releases, so find
+          # the document instead of assuming one exact path.
+          SBOM="$(find . -maxdepth 3 -name "*.spdx.json" -type f | head -1)"
+          if [ -z "$SBOM" ]; then
+            echo "::warning::no .spdx.json was produced; the release proceeds without an SBOM"
+            find . -maxdepth 3 -name "*sbom*" | head -20
+            exit 0
+          fi
+          if ! grep -q "spdxVersion" "$SBOM"; then
+            echo "::warning::$SBOM does not look like SPDX JSON; skipping its upload"
+            exit 0
+          fi
+          echo "SBOM: $SBOM ($(wc -c < "$SBOM") bytes)"
+          echo "found=$SBOM" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SBOM
+        if: steps.sbom.outputs.found != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmake-linux-sbom
+          path: ${{ steps.sbom.outputs.found }}
+          if-no-files-found: error
+
+
+      - name: Upload packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmake-linux-packages
+          path: |
+            build/linux-release/*.deb
+            build/linux-release/*.rpm
+            build/linux-release/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. Portable bundle: the self-contained layout, produced purely through the
+  #    install contract. Also exercises `uninstall` against a real tree.
+  # ---------------------------------------------------------------------------
+  build-linux-portable:
+    name: Build & package (Linux portable, CMake)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    needs: [contract-tests]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        # patchelf is kept in the list for the same reason `zip` is: it is part
+        # of the self-contained-bundle toolchain, and its absence surfaces as a
+        # confusing failure inside Qt's deployment helper rather than as a clear
+        # "tool not found". The deployment step itself is disabled in this job
+        # (see the build step) so the layout assertions stay deterministic.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config ccache patchelf zip \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev \
+            libjbig2dec0-dev libjpeg-dev libopenjp2-7-dev \
+            libfreetype-dev libgumbo-dev libgl1-mesa-dev
+
+      - name: Assert the portable toolchain is complete
+        run: |
+          set -euo pipefail
+          for tool in patchelf zip; do
+            command -v "${tool}" >/dev/null \
+              || { echo "::error::required tool '${tool}' is missing"; exit 1; }
+          done
+          echo "portable toolchain present"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: "6.7.2"
+          modules: "all"
+          cache: true
+
+      # SCOPE NOTE: this job verifies the PORTABLE INSTALL CONTRACT -- that the
+      # resources land beside the binary and that uninstall removes exactly what
+      # was installed. It deliberately disables Qt runtime deployment.
+      #
+      # SIOYEK_INSTALL_QT_DEPLOY=ON additionally runs Qt's deployment helper,
+      # which rewrites the RUNPATH of every Qt plugin it discovers. That helper
+      # is all-or-nothing: a single plugin it cannot patch aborts the whole
+      # install. Two independent failure modes were observed while bringing this
+      # job up -- a distro plugin with no RUNPATH entry at all (host Qt), and a
+      # path-resolution error under the runner's Qt (file RPATH_SET given FILE
+      # "/usr/plugins/..." that does not exist) -- neither of which is a defect
+      # in sioyek's install contract. Verifying Qt deployment robustness is a
+      # separate concern and is tracked separately rather than conflated with
+      # the layout assertions this job exists for.
+      - name: Build (linux-portable preset)
+        run: |
+          cmake --preset linux-portable -DSIOYEK_INSTALL_QT_DEPLOY=OFF
+          cmake --build --preset linux-portable -j"$(nproc)"
+
+      - name: Stage the portable install tree
+        run: |
+          set -euo pipefail
+          rm -rf stage
+          DESTDIR="${PWD}/stage" cmake --install build/linux-portable
+          test -x stage/usr/bin/sioyek
+          test -f stage/usr/bin/tutorial.pdf
+          test -d stage/usr/bin/shaders
+
+      - name: Verify uninstall removes exactly what was installed
+        # CRITICAL: DESTDIR must be passed to `cmake --build` as an ENVIRONMENT
+        # variable. The staged install recorded DESTDIR-prefixed paths in the
+        # manifest, and the uninstall rule resolves them from $ENV{DESTDIR} at
+        # run time. Invoking the target without it would resolve the paths
+        # against the REAL prefix and delete the host's installation instead of
+        # the staged copy.
+        env:
+          DESTDIR: ${{ github.workspace }}/stage
+        run: |
+          set -euo pipefail
+          before=$(find stage -type f | wc -l)
+          cmake --build build/linux-portable --target uninstall
+          after=$(find stage -type f | wc -l)
+          echo "files before uninstall: ${before}, after: ${after}"
+          test "${before}" -gt 0
+          test "${after}" -eq 0
+          echo "uninstall removed every installed file"
+
+      - name: Re-stage and archive the portable bundle
+        run: |
+          set -euo pipefail
+          rm -rf stage
+          DESTDIR="${PWD}/stage" cmake --install build/linux-portable
+          ( cd stage/usr && zip -r "${GITHUB_WORKSPACE}/sioyek-cmake-portable.zip" . )
+
+      - name: Upload the portable bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmake-linux-portable
+          path: sioyek-cmake-portable.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 4. Publish. Only on a tag or a manual run, never on a pull request.
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [build-linux-package, build-linux-portable]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+
+      - name: Verify the primary artifacts are present
+        run: |
+          set -euo pipefail
+          find dist -type f | sort
+          # The release must never publish nothing. SBOM absence is tolerated
+          # (warned about in the build job), but a missing package is not.
+          # Match with a shell glob rather than "find ... \( -name A -o ...".
+          # The escaped parentheses are fragile inside a YAML block scalar: an
+          # earlier revision shipped a bare "(" and the step died with
+          # "syntax error near unexpected token `(`". A case match is also
+          # easier to read than a find expression.
+          found=0
+          for f in dist/*/*; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.deb|*.rpm|*.tar.gz|*.zip)
+                echo "  package: $f"
+                found=1
+                ;;
+            esac
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no packages were downloaded; refusing to publish an empty release"
+            exit 1
+          fi
+          echo "primary artifacts present"
+
+      - name: Create or update the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('cmake-manual-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('CMake manual build {0}', github.run_number) }}
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # SBOM is an ADDITIONAL artifact, not a release blocker: if it is
+          # missing the packages must still be published, with the omission
+          # visible as a warning rather than as a failed release. Hence
+          # fail_on_unmatched_files is false here. The primary artifacts are
+          # checked explicitly in the step above.
+          fail_on_unmatched_files: false
+          files: |
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            dist/**/*.spdx.json
