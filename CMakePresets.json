@@ -64,24 +64,22 @@
     },
     {
       "name": "linux-portable",
-      "displayName": "Linux Portable (resources beside binary; self-contained Qt; stripped)",
+      "displayName": "Linux Portable (resources beside the binary; system Qt; stripped)",
       "inherits": "linux-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "SIOYEK_INSTALL_LAYOUT": "portable",
-        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
         "SIOYEK_STRIP_ON_INSTALL": "ON",
         "SIOYEK_PACKAGE_STRIP": "ON"
       }
     },
     {
       "name": "linux-appimage",
-      "displayName": "Linux AppImage (self-contained; stripped; LTO)",
+      "displayName": "Linux AppImage (self-contained via linuxdeploy; stripped; LTO)",
       "inherits": "linux-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "SIOYEK_INSTALL_LAYOUT": "standard",
-        "SIOYEK_INSTALL_QT_DEPLOY": "ON",
         "SIOYEK_ENABLE_LTO": "ON",
         "SIOYEK_STRIP_ON_INSTALL": "ON",
         "SIOYEK_PACKAGE_STRIP": "ON",

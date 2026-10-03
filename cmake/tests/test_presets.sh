@@ -3,7 +3,12 @@
 # test_presets.sh
 # Regression test: verifies CMakePresets.json is usable and the naming is consistent.
 # =============================================================================
-set -u
+# Strict mode. `-u` fails on an unset variable (a bug, not an empty string) and
+# `-o pipefail` makes a pipeline report the rightmost NON-ZERO status, so
+# `command | grep -q pattern` can no longer report success when `command`
+# itself crashed. `-e` is deliberately NOT set: this suite counts failures and
+# must keep running after one, reporting the full picture in a single pass.
+set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0
 ok()  { printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1)); }
@@ -117,6 +122,46 @@ if grep -q "list-build-presets.cmake" "${REPO_ROOT}/Makefile"; then
     ok "Makefile uses the portable preset lister"
 else
     bad "Makefile does not use the portable preset lister"
+fi
+
+# 9) Qt deployment must not be requested by the SELF-CONTAINED presets.
+#
+#    Both of these were real, and neither was caught by any test:
+#      * linux-portable and linux-appimage each enabled SIOYEK_INSTALL_QT_DEPLOY.
+#        That option runs Qt's deployment helper, which rewrites the RUNPATH of
+#        every Qt plugin it discovers and ABORTS the whole install when one
+#        cannot be patched (observed: a distro plugin with no RUNPATH entry, and
+#        a path-resolution error under a different Qt). Neither preset could
+#        complete "cmake --install" at all.
+#      * linux-appimage additionally runs linuxdeploy with --plugin qt, which
+#        performs the same deployment and does succeed. Enabling both meant the
+#        failing one ran first and nothing else got a chance.
+#
+#    Rule: a self-contained preset leaves Qt deployment to the system Qt
+#    (portable) or to linuxdeploy (AppImage), never to Qt's cmake helper.
+if python3 "${REPO_ROOT}/cmake/tests/preset_qt_deploy_check.py" "${REPO_ROOT}/CMakePresets.json"; then
+    ok "self-contained presets leave SIOYEK_INSTALL_QT_DEPLOY off"
+else
+    bad "a self-contained preset enables SIOYEK_INSTALL_QT_DEPLOY, which cannot complete"
+fi
+
+# 10) Turning the cmake-side deployment off must not leave the AppImage without
+#     a Qt runtime: linuxdeploy has to remain the mechanism that provides it.
+if grep -q -- "--plugin qt" "${REPO_ROOT}/cmake/SioyekAppImage.cmake"; then
+    ok "the AppImage driver still deploys Qt via linuxdeploy --plugin qt"
+else
+    bad "the AppImage driver no longer deploys Qt; the bundle would lack a runtime"
+fi
+
+# 11) The recorded linuxdeploy hashes must be full-length and distinct. This
+#     cannot prove a hash matches the asset (only a real download can), but it
+#     catches the failure that actually happened: a truncated download gave a
+#     well-formed but wrong hash, and every AppImage build then failed at the
+#     integrity check for no visible reason.
+if python3 "${REPO_ROOT}/cmake/tests/check_linuxdeploy_hashes.py" "${REPO_ROOT}/cmake/SioyekAppImage.cmake"; then
+    ok "both linuxdeploy hashes are full-length and distinct"
+else
+    bad "linuxdeploy hashes are missing, truncated, or identical"
 fi
 
 echo

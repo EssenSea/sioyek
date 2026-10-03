@@ -18,25 +18,53 @@
 # See cmake/README.md for the full build system documentation.
 # =============================================================================
 
-# ---- Platform detection (neovim-style) -------------------------------------
+# ---- Platform detection ----------------------------------------------------
+# This Makefile runs POSIX-sh recipes (it is a thin wrapper around CMake, and
+# every per-preset/install/test/clean recipe relies on a POSIX shell). On
+# Windows that shell is provided by Git for Windows / MSYS2 / Cygwin, which is
+# also what supplies `make` itself. We therefore locate a POSIX `sh` explicitly
+# and fail with actionable guidance if none exists, instead of pretending a
+# PowerShell recipe translation exists (an earlier revision aliased SHELL to
+# powershell.exe but kept POSIX-only recipes such as `[ -d ... ]`, `sed`, and
+# `find | xargs`, which cannot work there).
+#
+# `cmake` is required and discovered portably: on Windows `where` resolves it,
+# elsewhere `command -v`; CMake's own location is also honored via $CMAKE.
+
 ifeq ($(OS),Windows_NT)
-  UNIX_LIKE := FALSE
+  HOST_IS_WINDOWS := TRUE
 else
-  UNIX_LIKE := TRUE
+  HOST_IS_WINDOWS := FALSE
 endif
 
-ifeq ($(UNIX_LIKE),FALSE)
-  SHELL := powershell.exe
-  .SHELLFLAGS := -NoProfile -NoLogo
-  RM := remove-item -force
-  CMAKE := cmake
-  NPROC := $(NUMBER_OF_PROCESSORS)
-else
-  RM := rm -rf
-  CMAKE := $(shell command -v cmake3 2>/dev/null || command -v cmake)
-  NPROC := $(shell (command -v nproc >/dev/null 2>&1 && nproc) \
-                 || (command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu) \
-                 || echo 1)
+# Prefer an explicitly provided CMAKE, else cmake3, else cmake.
+CMAKE ?= $(shell command -v cmake3 2>/dev/null || command -v cmake 2>/dev/null)
+
+# POSIX shell used for recipes. On Windows, GNU make's default SHELL is cmd.exe;
+# point it at sh if available (Git Bash / MSYS2). We probe a few common names.
+ifeq ($(HOST_IS_WINDOWS),TRUE)
+  ifeq ($(origin SHELL),default)
+    SHELL := $(shell (command -v sh 2>/dev/null) || (command -v bash 2>/dev/null))
+  endif
+endif
+
+RM := rm -rf
+
+# Parallelism: nproc -> sysctl -> Windows NUMBER_OF_PROCESSORS -> 1.
+NPROC := $(shell (command -v nproc >/dev/null 2>&1 && nproc) \
+               || (command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu) \
+               || echo $(if $(NUMBER_OF_PROCESSORS),$(NUMBER_OF_PROCESSORS),1))
+
+# ---- Tool sanity checks ----------------------------------------------------
+# Fail early with actionable messages rather than mid-build.
+ifeq ($(strip $(CMAKE)),)
+  $(error cmake was not found in PATH. Install CMake >= 3.25 (presets) and re-run)
+endif
+
+ifeq ($(HOST_IS_WINDOWS),TRUE)
+  ifeq ($(strip $(SHELL)),)
+    $(error This Makefile drives POSIX-sh recipes. On Windows run it from a POSIX environment that provides 'sh' and 'make' (Git for Windows "Git Bash", MSYS2, or Cygwin), and ensure 'sh' is on PATH)
+  endif
 endif
 
 # ---- Configuration ---------------------------------------------------------
@@ -49,7 +77,7 @@ BUILD_DIR ?= build/$(PRESET)
 # Discovered configure presets, for the per-preset shortcut targets below
 # (e.g. `make linux-vendored`, `make install-linux-vendored`). Derived from CMake
 # so it stays in sync with CMakePresets.json; empty if cmake is unavailable.
-SIOYEK_PRESETS := $(shell $(CMAKE) --list-presets 2>/dev/null | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p')
+SIOYEK_PRESETS := $(shell $(CMAKE) -D SIOYEK_PRESETS_FILE=$(CURDIR)/CMakePresets.json -P $(CURDIR)/cmake/list-build-presets.cmake 2>/dev/null)
 
 # Extra CMake configure flags, e.g.
 #   make CMAKE_EXTRA_FLAGS='-DSIOYEK_MUPDF_UNEMBED_FONTS=CJK'
@@ -80,7 +108,7 @@ SIOYEK_CONFIGURE_FLAGS ?=
 # cmake/parse-build-options.sh.
 include cmake/options.mk
 
-.PHONY: all build configure phony-configure test install package appimage \
+.PHONY: all build configure phony-configure test install uninstall package appimage \
         format format-check lint deps checkprefix options \
         clean distclean clean-build clean-deps clean-stage clean-packages clean-in-source \
         list-presets help
@@ -137,9 +165,50 @@ install: configure
 	DESTDIR='$(DESTDIR)' $(CMAKE) --install $(BUILD_DIR) \
 	    $(if $(PREFIX),--prefix $(PREFIX),)
 
+# Remove the files a previous `make install` wrote, using the manifest that
+# `cmake --install` records (build/<preset>/install_manifest.txt).
+#
+# DESTDIR is honoured exactly as it is for install, so uninstalling a staged
+# tree (DESTDIR=/tmp/stage) removes only the staged copies -- it can never touch
+# the real system prefix as a side effect of a staged install.
+#
+# Files absent from disk are tolerated (the tree may already be partly removed),
+# but a MISSING MANIFEST is a hard error: without it there is nothing provably
+# installed, and silently doing nothing would make a stale install look removed.
+uninstall:
+	@if [ ! -f "$(BUILD_DIR)/install_manifest.txt" ]; then \
+	    echo "error: $(BUILD_DIR)/install_manifest.txt not found." >&2; \
+	    echo "       Nothing is known to be installed from PRESET=$(PRESET)." >&2; \
+	    echo "       Run 'make install' first (or set PRESET/BUILD_DIR to the" >&2; \
+	    echo "       build you want to uninstall)." >&2; \
+	    exit 1; \
+	fi
+	DESTDIR='$(DESTDIR)' $(CMAKE) --build $(BUILD_DIR) --target uninstall
+
+# `make package` uses the CMake *package preset* when this configure preset has
+# one, and falls back to a bare `cpack` otherwise.
+#
+# WHY: the old recipe ran `cd $(BUILD_DIR) && cpack`, which ignores
+# CMakePresets.json's packagePresets entirely and therefore
+#   * used whatever generators CPackConfig.cmake happened to carry rather than
+#     the ones the preset declares (the two could disagree silently), and
+#   * passed no `--config`, so it could not work with the multi-config
+#     generators (Visual Studio, Xcode) that the windows-* / macos-* presets use.
+# `cpack --preset` reads the declared generators and configuration; the fallback
+# keeps plain (preset-less) build directories working as before.
+PACKAGE_PRESET ?= $(PRESET)
+
 package: configure
 	$(CMAKE) --build --preset $(PRESET) -j$(JOBS)
-	cd $(BUILD_DIR) && cpack
+	@if $(CMAKE) -D SIOYEK_PRESETS_FILE=$(CURDIR)/CMakePresets.json \
+	        -D SIOYEK_PRESET_NAME=$(PACKAGE_PRESET) \
+	        -P $(CURDIR)/cmake/list-build-presets.cmake --has-package-preset >/dev/null 2>&1; then \
+	    echo "cpack --preset $(PACKAGE_PRESET)"; \
+	    cpack --preset $(PACKAGE_PRESET); \
+	else \
+	    echo "no CMake package preset named '$(PACKAGE_PRESET)'; running plain cpack in $(BUILD_DIR)"; \
+	    cd $(BUILD_DIR) && cpack; \
+	fi
 
 # ---- AppImage ---------------------------------------------------------------
 # Thin forwarder: all AppImage packaging logic lives in CMake
@@ -170,9 +239,27 @@ format-check:
 	        xargs clang-format --dry-run --Werror; \
 	else echo "clang-format not found"; exit 1; fi
 
-# Static analysis with clang-tidy (needs a configured build dir for flags).
-lint: $(BUILD_DIR)/.ran-cmake
+# Static analysis with clang-tidy.
+#
+# clang-tidy needs a *configured* build directory: it reads compile_commands.json
+# (which the presets enable via CMAKE_EXPORT_COMPILE_COMMANDS) to obtain the real
+# per-translation-unit flags. Depending on the `configure` target below is
+# therefore both necessary and sufficient.
+#
+# HISTORY: this rule previously depended on $(BUILD_DIR)/.ran-cmake, a stamp file
+# that NO rule in the repository ever created -- so `make lint` always died with
+# "No rule to make target .../build/<preset>/.ran-cmake" before doing anything.
+# `configure` is the target that actually produces the needed artifact, so the
+# dependency is now real and the target works as documented. This is covered by
+# a contract test (test_make_options_contract.sh) so the stamp file cannot
+# silently come back.
+lint: configure
 	@if command -v clang-tidy >/dev/null 2>&1; then \
+	    if [ ! -f "$(BUILD_DIR)/compile_commands.json" ]; then \
+	        echo "error: $(BUILD_DIR)/compile_commands.json is missing;" >&2; \
+	        echo "       clang-tidy needs it (CMAKE_EXPORT_COMPILE_COMMANDS=ON)." >&2; \
+	        exit 1; \
+	    fi; \
 	    find pdf_viewer -name '*.cpp' | \
 	        xargs clang-tidy -p $(BUILD_DIR); \
 	else echo "clang-tidy not found"; exit 1; fi
@@ -245,6 +332,7 @@ help:
 	@echo '  make package-<preset>     build + cpack, e.g. make package-linux-release'
 	@echo '  make test                 build and run CTest'
 	@echo '  make install DESTDIR=...  build and staged install'
+	@echo '  make uninstall            remove files a previous install wrote'
 	@echo '  make package              build and run CPack'
 	@echo '  make appimage             build an AppImage'
 	@echo '  make clean                remove objects of the current build dir'

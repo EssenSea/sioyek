@@ -132,6 +132,71 @@ if(SIOYEK_PACKAGE_STRIP)
     message(STATUS "sioyek: CPack will strip packaged binaries (SIOYEK_PACKAGE_STRIP=ON)")
 endif()
 
+# ---------------------------------------------------------------------------
+# Reproducible packaging: SOURCE_DATE_EPOCH.
+#
+# WHY it matters: without it, archive members carry whatever mtime they had on
+# the build machine, so two builds of identical sources produce packages with
+# different checksums. A release then cannot be verified by rebuilding, and
+# build caches cannot be shared. See
+#   https://reproducible-builds.org/docs/source-date-epoch/
+#
+# WHAT THIS MODULE CAN AND CANNOT DO -- measured, not assumed:
+#
+#   * DEB is reproducible, but ONLY when the variable is present in the
+#     environment of the CPACK PROCESS ITSELF. CPack reads it directly, and it
+#     cannot be injected from here: everything set with set(ENV{...}) during
+#     configure belongs to the CONFIGURE process, while cpack runs later as a
+#     separate invocation. Setting it only for configure looks like it works
+#     and changes nothing -- which is exactly what an earlier revision of this
+#     file did.
+#
+#   * TGZ is NOT reproducible through CPack at all. The archive generator
+#     exposes no timestamp variable (CPACK_ARCHIVE_* covers names, ids,
+#     compression level and thread count -- not time), so member mtimes come
+#     from the staged files. A reproducible tarball has to be repacked outside
+#     CPack, e.g.
+#         tar --sort=name --mtime=@${epoch} --owner=0 --group=0 --numeric-owner
+#     That is the packager job; this file cannot do it for you.
+#
+#   * RPM is likewise not handled by CPack.
+#
+# So this module does the one thing that is both possible and honest: validate
+# the value, serialise archive creation, and state which formats remain
+# non-reproducible instead of implying the setting is global.
+# ---------------------------------------------------------------------------
+
+# The variable must be exported to the cpack invocation, e.g.
+#     SOURCE_DATE_EPOCH=1600000000 cmake --build <dir> --target package
+if(DEFINED ENV{SOURCE_DATE_EPOCH} AND NOT "$ENV{SOURCE_DATE_EPOCH}" STREQUAL "")
+    set(_sioyek_sde "$ENV{SOURCE_DATE_EPOCH}")
+
+    # Validate: a malformed value silently becoming epoch 0 would look
+    # reproducible while recording a wrong date.
+    if(NOT _sioyek_sde MATCHES "^[0-9]+$")
+        message(FATAL_ERROR
+            "SOURCE_DATE_EPOCH must be a non-negative integer number of seconds "
+            "since the Unix epoch, but it is set to '${_sioyek_sde}'. See "
+            "https://reproducible-builds.org/docs/source-date-epoch/")
+    endif()
+
+    # Deterministic member order: a threaded archiver may add entries in any
+    # order, defeating reproducibility even where a timestamp is fixed.
+    set(CPACK_ARCHIVE_THREADS 0)
+
+    message(STATUS
+        "sioyek: SOURCE_DATE_EPOCH=${_sioyek_sde} -- DEB will be reproducible "
+        "only if cpack itself is launched with this variable in its environment "
+        "(CPack reads it directly; a configure-time set() does not reach it). "
+        "TGZ and RPM stay non-reproducible: the CPack archive generator has no "
+        "timestamp control, so those require repacking by the packager.")
+else()
+    message(STATUS
+        "sioyek: SOURCE_DATE_EPOCH is not exported; packaged archives embed the "
+        "current time and are NOT bit-for-bit reproducible. Export it for the "
+        "cpack invocation to make DEB reproducible; TGZ/RPM need repacking.")
+endif()
+
 include(CPack)
 
 message(STATUS "sioyek: CPack packaging configured (formats=${SIOYEK_PACKAGE_FORMATS}, version=${PROJECT_VERSION})")
