@@ -142,7 +142,6 @@
       "name": "windows-release",
       "displayName": "Windows Release (MSVC)",
       "inherits": "base",
-      "generator": "Visual Studio 17 2022",
       "cacheVariables": {
         "SIOYEK_INSTALL_QT_DEPLOY": "ON",
         "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",
@@ -153,7 +152,6 @@
       "name": "windows-debug",
       "displayName": "Windows Debug (MSVC)",
       "inherits": "base",
-      "generator": "Visual Studio 17 2022",
       "cacheVariables": {
         "SIOYEK_INSTALL_QT_DEPLOY": "ON",
         "SIOYEK_USE_SYSTEM_MUPDF": "AUTO",

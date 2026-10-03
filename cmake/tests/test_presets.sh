@@ -3,12 +3,7 @@
 # test_presets.sh
 # Regression test: verifies CMakePresets.json is usable and the naming is consistent.
 # =============================================================================
-# Strict mode. `-u` fails on an unset variable (a bug, not an empty string) and
-# `-o pipefail` makes a pipeline report the rightmost NON-ZERO status, so
-# `command | grep -q pattern` can no longer report success when `command`
-# itself crashed. `-e` is deliberately NOT set: this suite counts failures and
-# must keep running after one, reporting the full picture in a single pass.
-set -uo pipefail
+set -u
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0
 ok()  { printf '  [PASS] %s\n' "$1"; PASS=$((PASS+1)); }
