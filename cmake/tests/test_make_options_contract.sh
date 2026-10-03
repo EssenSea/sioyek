@@ -18,7 +18,12 @@
 #   - per-preset shortcuts (`make <preset>`, `make install-<preset>`, ...) exist,
 #     resolve to the right preset, and also use the recorded options
 # =============================================================================
-set -u
+# Strict mode. `-u` fails on an unset variable (a bug, not an empty string) and
+# `-o pipefail` makes a pipeline report the rightmost NON-ZERO status, so
+# `command | grep -q pattern` can no longer report success when `command`
+# itself crashed. `-e` is deliberately NOT set: this suite counts failures and
+# must keep running after one, reporting the full picture in a single pass.
+set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PARSER="${REPO_ROOT}/cmake/parse-build-options.sh"
@@ -161,7 +166,9 @@ if [ -f "${REPO_ROOT}/configure" ]; then
     else
         ok "./configure is POSIX-sh portable"
     fi
-    if grep -qE '<\(|\bdeclare\b|\blocal\b|\[\[' "${PARSER}"; then
+    # NOTE: match only a real `[[ ... ]]` test, not POSIX character classes
+    # such as [[:space:]] (the previous `\[\[` pattern false-positived on them).
+    if grep -qE '<\(|\bdeclare\b|\blocal\b|(^|[^:[:alnum:]])\[\[ ' "${PARSER}"; then
         bad "parse-build-options.sh uses non-POSIX shell constructs"
     else
         ok "parse-build-options.sh is POSIX-sh portable"
@@ -189,6 +196,9 @@ if command -v make >/dev/null 2>&1; then
     cp "${REPO_ROOT}/CMakePresets.json" "${CONFROOT}/"
     cp "${REPO_ROOT}/cmake/options.mk" "${CONFROOT}/cmake/"
     cp "${REPO_ROOT}/cmake/parse-build-options.sh" "${CONFROOT}/cmake/"
+    # The Makefile discovers the per-preset shortcut targets with a CMake script;
+    # it must be present in the throwaway tree too.
+    cp "${REPO_ROOT}/cmake/list-build-presets.cmake" "${CONFROOT}/cmake/" 2>/dev/null || true
 
     # ./configure records the flags.
     if (cd "${CONFROOT}" && ./configure --enable-lto --disable-tests --with-system-mupdf >/dev/null 2>&1); then
@@ -368,6 +378,60 @@ if command -v make >/dev/null 2>&1; then
     else
         bad "make without config.mk unexpected (got: ${cmd})"
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# Value validation: enum enforcement + whitespace/empty rejection.
+# Guards against silently producing a -D string that make would word-split (a
+# config.mk round-trip injection) or that CMake would only reject much later.
+# ---------------------------------------------------------------------------
+echo "--- value validation (enums, whitespace, empty) ---"
+
+# Valid enum values accepted.
+for pair in "install-layout:portable" "system-mupdf:auto" "mupdf-unembed-fonts:CJK" \
+            "ccache:OFF" "system-sqlite:on"; do
+    name="${pair%%:*}"; val="${pair#*:}"
+    if "${PARSER}" "--with-${name}=${val}" >/dev/null 2>&1; then
+        ok "enum accepts --with-${name}=${val}"
+    else
+        bad "enum wrongly rejected --with-${name}=${val}"
+    fi
+done
+
+# Invalid enum value rejected with a diagnostic.
+if out="$("${PARSER}" --with-install-layout=bogus 2>&1)"; then
+    bad "invalid enum value should fail"
+else
+    grep -qi "invalid value" <<<"${out}" && ok "invalid enum value rejected with diagnostic" \
+        || bad "invalid enum rejected without a clear diagnostic (got: ${out})"
+fi
+
+# Free-form option still accepts an arbitrary value.
+if "${PARSER}" --with-package-formats=DEB >/dev/null 2>&1; then
+    ok "free-form option accepts an arbitrary value"
+else
+    bad "free-form option wrongly rejected a valid value"
+fi
+
+# Whitespace in a value must be rejected (would be word-split by make).
+if "${PARSER}" --with-install-layout='foo bar' >/dev/null 2>&1; then
+    bad "value with whitespace should be rejected"
+else
+    ok "value with whitespace rejected"
+fi
+
+# Empty install-directory value must be rejected.
+if "${PARSER}" --prefix= >/dev/null 2>&1; then
+    bad "empty --prefix= should be rejected"
+else
+    ok "empty --prefix= rejected"
+fi
+
+# ./configure must refuse an invalid value too (not just the parser).
+if "${REPO_ROOT}/configure" --with-install-layout=bogus >/dev/null 2>&1; then
+    bad "./configure accepted an invalid enum value"
+else
+    ok "./configure rejects an invalid enum value"
 fi
 
 echo

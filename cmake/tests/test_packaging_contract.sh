@@ -9,7 +9,12 @@
 #   - SIOYEK_PACKAGE_FORMATS is honored
 #   - SIOYEK_PACKAGE_STRIP drives CPACK_STRIP_FILES
 # =============================================================================
-set -u
+# Strict mode. `-u` fails on an unset variable (a bug, not an empty string) and
+# `-o pipefail` makes a pipeline report the rightmost NON-ZERO status, so
+# `command | grep -q pattern` can no longer report success when `command`
+# itself crashed. `-e` is deliberately NOT set: this suite counts failures and
+# must keep running after one, reporting the full picture in a single pass.
+set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
