@@ -121,7 +121,7 @@ mk_help="$(cd "${REPO_ROOT}" && make options 2>/dev/null)"
 conf_help=""
 [ -x "${REPO_ROOT}/configure" ] && conf_help="$(cd "${REPO_ROOT}" && ./configure --help 2>/dev/null)"
 missing=0
-while IFS=: read -r name var; do
+while IFS=: read -r name _; do
     grep -q -- "--enable-${name}\|--with-${name}" <<<"${mk_help}" || missing=$((missing+1))
     [ -n "${conf_help}" ] && { grep -q -- "--enable-${name}\|--with-${name}" <<<"${conf_help}" || missing=$((missing+1)); }
 done < <("${PARSER}" --list)
