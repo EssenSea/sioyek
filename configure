@@ -97,10 +97,29 @@ flags=$("$parser" $passthru) || exit $?
 fi
 
 # Validate an explicit preset, if any.
+#
+# The validation list is produced by cmake/list-build-presets.cmake (a CMake
+# script) rather than by \`cmake --list-presets | grep\`, so this works without
+# \`grep\` and agrees exactly with the preset list the Makefile derives its
+# shortcut targets from -- one source of truth for both.
+#
+# A MISSING cmake is now a hard error rather than a silent skip. The previous
+# implementation wrapped the whole check in \`if command -v cmake\`, so on a host
+# without cmake ./configure accepted ANY --preset value, wrote it into config.mk,
+# and the failure surfaced much later as a confusing make error. Refusing early
+# is consistent with the Makefile, which already fails hard when cmake is absent.
 if [ -n "$preset" ]; then
-if command -v cmake >/dev/null 2>&1; then
-if ! (cd "$repo_root" && cmake --list-presets 2>/dev/null | grep -q "\"$preset\""); then
-echo "configure: unknown preset '$preset' (run 'cmake --list-presets')" >&2
+if ! command -v cmake >/dev/null 2>&1; then
+echo "configure: cmake is required to validate --preset=$preset, but it was not found in PATH" >&2
+exit 2
+fi
+if [ -f "$repo_root/CMakePresets.json" ]; then
+if ! cmake -D "SIOYEK_PRESETS_FILE=$repo_root/CMakePresets.json" \
+        -P "$repo_root/cmake/list-build-presets.cmake" 2>/dev/null | grep -qx "$preset"; then
+echo "configure: unknown preset '$preset'" >&2
+echo "configure: available presets:" >&2
+cmake -D "SIOYEK_PRESETS_FILE=$repo_root/CMakePresets.json" \
+    -P "$repo_root/cmake/list-build-presets.cmake" 2>/dev/null | sed 's/^/  /' >&2
 exit 2
 fi
 fi
