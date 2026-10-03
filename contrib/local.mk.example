@@ -7,8 +7,8 @@
 # Extra CMake configure flags (raw -D; see cmake/README.md):
 # CMAKE_EXTRA_FLAGS = -DSIOYEK_MUPDF_UNEMBED_FONTS=CJK -DSIOYEK_ENABLE_LTO=ON
 
-# Note: friendly autoconf-style options are recorded by ./configure into
-# config.mk, not set here. Use raw -D via CMAKE_EXTRA_FLAGS above for one-offs.
+# Friendly autoconf-style options (translated to -DSIOYEK_*; run `make options`):
+# EXTRA_CMAKE_ARGS = --enable-lto --disable-tests --with-system-mupdf
 
 # Install prefix / staging:
 # PREFIX = /usr/local

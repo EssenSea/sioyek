@@ -50,15 +50,6 @@ CMake is the source of truth for the build. The pieces that matter:
   `CMAKE_EXTRA_FLAGS`, `PREFIX`, `DESTDIR`, `JOBS`, ... (see
   `contrib/local.mk.example`). **The Makefile is authored and tracked: no clean
   target may ever delete it** (see §5).
-  The per-preset shortcut targets (`make <preset>`, `make install-<preset>`, ...)
-  are discovered by `cmake/list-build-presets.cmake`, a small CMake script that
-  parses `CMakePresets.json`. This replaced a `cmake --list-presets | sed`
-  pipeline, removing the `sed` dependency (and making the discovery work under
-  the Makefile's Windows branch).
-  The Makefile drives POSIX-sh recipes; on Windows run it from a POSIX
-  environment that provides `sh` and `make` (Git for Windows "Git Bash",
-  MSYS2, or Cygwin). It fails fast with an actionable message if no POSIX shell
-  is available instead of silently running broken recipes.
 * `cmake/Sioyek*.cmake` — modular concerns: `BuildTypes` (optimization, strip,
   LTO, ccache, unity), `Dependencies` (unified config/module/pkg-config
   resolver), `Mupdf` and `SQLite` (consumption contracts), `Install` (the
@@ -191,7 +182,7 @@ source contrib/configure-completion.bash
 `cmake/parse-build-options.sh`, so both stay in sync.
 
 A git-ignored `local.mk` (see `contrib/local.mk.example`) can override `PRESET`,
-`CMAKE_EXTRA_FLAGS`, `PRESET`, `PREFIX`, `DESTDIR`, `JOBS`, ...
+`CMAKE_EXTRA_FLAGS`, `EXTRA_CMAKE_ARGS`, `PREFIX`, `DESTDIR`, `JOBS`, ...
 
 ### Direct CMake
 
@@ -210,59 +201,30 @@ ctest --test-dir build --output-on-failure
 
 ---
 
-## 2b. The Makefile and `./configure` are wrappers over CMake
+## 2b. Friendly build options (`--enable-*` / `--with-*`)
 
-**CMake is the source of truth.** Everything the Makefile and `./configure` do
-can be done directly with CMake; they only add convenience (short target names,
-autoconf-style option spellings, option recording). In particular there is **no
-build logic outside CMake** — the Makefile forwards to `cmake`/`ctest`/`cpack`,
-and `./configure` merely records `-D` flags in `config.mk`.
-
-| Convenience | Equivalent with pure CMake |
-|---|---|
-| `make <preset>` | `cmake --preset <preset> && cmake --build --preset <preset>` |
-| `make install` | `cmake --install build/<preset>` (with `DESTDIR`) |
-| `make test` | `cmake --build --preset <preset> && ctest --test-dir build/<preset>` |
-| `make package` | `cd build/<preset> && cpack` |
-| `make appimage` | `cmake --build --preset linux-appimage --target appimage` |
-| `make clean` / `distclean` / `clean-*` | `cmake --build build/<preset> --target clean*` |
-| `./configure --enable-X` | `cmake --preset <p> -DSIOYEK_*=ON` |
-| `./configure --prefix=/usr` | `cmake --preset <p> -DCMAKE_INSTALL_PREFIX=/usr` |
-| `make options` | `cmake -L` / the table in `cmake/parse-build-options.sh` |
-
-`./configure` accepts autoconf-style flags and records the resulting `-D` values
-in a git-ignored `config.mk`, which `make` then passes to CMake:
+The CMake `-DSIOYEK_*` cache variables are the source of truth, but the top-level
+Makefile wraps them in familiar autoconf-style flags so users do not have to
+remember the spelling. Pass them through `EXTRA_CMAKE_ARGS`:
 
 ```sh
-./configure --enable-lto --disable-tests --with-system-mupdf
-./configure --prefix=/usr --sysconfdir=/etc
-./configure --with-install-layout=portable --preset=linux-portable
-make options            # list every flag and the CMake variable it maps to
+make build EXTRA_CMAKE_ARGS="--enable-lto --disable-tests"
+make build EXTRA_CMAKE_ARGS="--with-system-mupdf --with-install-layout=portable"
+make install DESTDIR=/tmp/stage EXTRA_CMAKE_ARGS="--enable-strip-on-install"
+make options            # list every supported flag and the CMake variable it maps to
 ```
 
-| Flag | CMake variable |
+| Friendly flag | CMake variable |
 |---|---|
-| `--enable-X` / `--with-X` | `-DSIOYEK_*=ON` |
-| `--disable-X` / `--without-X` | `-DSIOYEK_*=OFF` |
-| `--enable-X=VALUE` / `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (`yes/on/1`->`ON`, `no/off/0`->`OFF`) |
-| `--prefix=DIR` / `--sysconfdir=DIR` / ... | `-DCMAKE_INSTALL_*=DIR` |
-| `-D<var>=<value>` | passed through unchanged |
+| `--enable-X` / `--disable-X` | `-DSIOYEK_*=ON` / `=OFF` (booleans) |
+| `--with-X` / `--without-X` | `-DSIOYEK_*=ON` / `=OFF` (tri-state) |
+| `--with-X=VALUE` | `-DSIOYEK_*=VALUE` (tri-state or value) |
 
-* All four prefixes work for every option (autoconf semantics).
-* An unknown option aborts with a pointer to `make options`.
-* **Values are validated up front.** Options with a fixed set of accepted values
-  (`SIOYEK_USE_SYSTEM_MUPDF` = `AUTO|ON|OFF`, `SIOYEK_INSTALL_LAYOUT` =
-  `standard|portable`, `SIOYEK_MUPDF_UNEMBED_FONTS` = `OFF|CJK|CJK_LANG|ALL`,
-  `SIOYEK_ENABLE_CCACHE`, `SIOYEK_STRICT_NON_THIRD_PARTY_WARN`,
-  `SIOYEK_WERROR_RETURN_TYPE`, `SIOYEK_USE_SYSTEM_SQLITE`,
-  `SIOYEK_INSTALL_QT_DEPLOY`, `SIOYEK_SQLITE_TRIM`) are checked against an enum
-  table; an invalid value fails immediately instead of reaching CMake.
-* Values containing whitespace, or empty install-directory values, are rejected:
-  they would otherwise be word-split by `make` when the recorded
-  `SIOYEK_CONFIGURE_FLAGS` is re-expanded, changing the intended `-D` argument.
-* The mapping (and the enum table) lives in `cmake/parse-build-options.sh`
-  (single source of truth), shared by `./configure`, `make options` and the
-  shell completion, and guarded by `test_make_options_contract.sh`.
+* Bare names (`enable-lto`) are accepted too.
+* Raw `-D` flags still pass through unchanged.
+* An unknown option aborts the build with a pointer to `make options`.
+* The mapping lives in `cmake/parse-build-options.sh` (single source of truth);
+  `make options` prints it, and `test_make_options_contract.sh` guards it.
 
 ---
 
@@ -470,16 +432,6 @@ Implications to be aware of:
   `-DCMAKE_INSTALL_PREFIX=/usr/local` while the binary looks under `/usr`),
   resource lookup will not match. Use a matching prefix (the presets set
   `/usr`).
-* **This mismatch is now checked at configure time.** `SioyekInstall.cmake`
-  compares `CMAKE_INSTALL_FULL_SYSCONFDIR`/`CMAKE_INSTALL_FULL_DATADIR` against
-  the runtime's hard-coded `/etc` and `/usr/share`:
-  * under the `standard` layout with a different prefix it emits a **WARNING**
-    naming the exact fix (so the documented preset-less `cmake -S . -B build`
-    workflow keeps working);
-  * set `-DSIOYEK_STRICT_INSTALL_PREFIX=ON` to promote that to a hard
-    **FATAL_ERROR** (recommended for CI and packaging);
-  * the `portable` layout is the sanctioned way to relocate the tree and never
-    triggers the warning.
 * The config destination uses the **absolute** sysconfdir
   (`CMAKE_INSTALL_FULL_SYSCONFDIR`), not the prefix-relative one. With the
   conventional `-DCMAKE_INSTALL_PREFIX=/usr`, using the relative form would
@@ -550,35 +502,7 @@ Run `cmake --list-presets` to see all. Summary:
 | `linux-vendored` | Release | yes | vendored mupdf/sqlite (reproducible) |
 | `linux-ci` | Release | no | fast CI build |
 | `macos-release` / `macos-debug` | | | |
-| `windows-release` / `windows-debug` | | | MSVC (see the Windows note below) |
-
-#### Windows support status (be precise)
-
-The `windows-*` presets exist and are recognized by CMake. They deliberately
-do **not** pin a Visual Studio generator version: CMake then selects the newest
-installed VS on the host. (A pinned `"Visual Studio 17 2022"` broke as soon as
-CI runner images moved to VS 2025, where CMake reports "could not find any
-instance of Visual Studio".)
-
-The **vendored mupdf route cannot be built under MSVC**: mupdf's own Windows build is a Visual
-Studio solution (`mupdf/platform/win32/mupdf.sln`), whereas `SioyekMupdf.cmake`
-drives mupdf's POSIX Makefile. `SioyekMupdf.cmake` therefore fails fast at
-configure time with an actionable message for the `WIN32 AND MSVC` + vendored
-combination (it names `mupdf.sln` and the alternatives).
-
-To produce a Windows binary today either:
-
-* provide a system/prebuilt mupdf and configure with
-  `-DSIOYEK_USE_SYSTEM_MUPDF=ON` (make it discoverable via `CMAKE_PREFIX_PATH`
-  or a pkg-config file), or
-* use the legacy qmake release path (`build_windows.bat`), which builds
-  `mupdf.sln` directly.
-
-`windows-cmake-validate` in `.github/workflows/cmake_build.yml` runs on
-`windows-latest`, discovers the available Visual Studio generator dynamically
-(to survive runner-image VS upgrades) and asserts this behaviour (plus that
-CMake recognizes the presets), so the Windows CMake path has at least one real
-CI signal.
+| `windows-release` / `windows-debug` | | | MSVC |
 
 ---
 
