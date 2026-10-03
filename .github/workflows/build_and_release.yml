@@ -14,14 +14,14 @@ on:
 jobs:
   upload-release:
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name != 'pull_request') }}
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     needs: [build-mac, build-mac-arm, build-linux, build-windows]
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: create release
       id: create_release
-      uses: actions/create-release@master
+      uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
       with:
@@ -78,7 +78,7 @@ jobs:
 
   build-linux:
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Cache apt-get packages
@@ -256,3 +256,70 @@ jobs:
       with:
         name: mac-arm-uploads
         path: sioyek-release-mac-arm.zip
+
+  # ---------------------------------------------------------------------------
+  # CMake/preset-based Linux build.
+  #
+  # This job is the CI expression of the modern CMake system (CMakePresets +
+  # cmake/Sioyek*.cmake). It complements the legacy qmake `build-linux` job
+  # above: the latter produces the historical `sioyek-release-linux.zip`, while
+  # this one validates that the supported `linux-*` presets configure, build,
+  # install and pass the contract test suite from scratch, and ships a portable
+  # bundle built purely through the install contract.
+  #
+  # Keeping both means the CMake route is continuously verified without changing
+  # the artifact contract of the existing release pipeline.
+  # ---------------------------------------------------------------------------
+  build-linux-cmake:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config ccache \
+            libharfbuzz-dev libsqlite3-dev zlib1g-dev libjbig2dec0-dev \
+            libjpeg-dev libopenjp2-7-dev libfreetype-dev libgumbo-dev \
+            libgl1-mesa-dev
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.2'
+          modules: 'all'
+          cache: true
+
+      - name: Configure (linux-portable preset)
+        run: cmake --preset linux-portable
+
+      - name: Build (linux-portable preset)
+        run: cmake --build --preset linux-portable -j"$(nproc)"
+
+      - name: Contract tests (CTest)
+        run: |
+          BUILD_DIR="$(bash cmake/tests/resolve_preset_bindir.sh linux-portable)"
+          ctest --test-dir "${BUILD_DIR}" --output-on-failure
+
+      - name: Stage install (verify install contract)
+        run: |
+          BUILD_DIR="$(bash cmake/tests/resolve_preset_bindir.sh linux-portable)"
+          rm -rf stage
+          DESTDIR="$PWD/stage" cmake --install "${BUILD_DIR}"
+
+      - name: Package portable bundle
+        run: |
+          set -e
+          test -x stage/usr/bin/sioyek
+          test -f stage/usr/bin/tutorial.pdf
+          test -d stage/usr/bin/shaders
+          # The portable layout puts resources beside the binary.
+          (cd stage/usr && zip -r "$GITHUB_WORKSPACE/sioyek-release-linux-cmake.zip" .)
+
+      - name: Upload CMake linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cmake-uploads
+          path: sioyek-release-linux-cmake.zip
