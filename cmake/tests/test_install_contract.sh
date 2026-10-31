@@ -73,13 +73,22 @@ if configure standard "${B}" -DCMAKE_INSTALL_PREFIX=/usr; then
     expect_path "${INST}" "/bin"                                "standard: executable -> bin"
     expect_path "${INST}" "/share/sioyek/shaders"               "standard: shaders -> share/sioyek/shaders"
     expect_path "${INST}" "/share/sioyek"                       "standard: tutorial -> share/sioyek"
-    expect_path "${INST}" "/etc/sioyek"                         "standard: config -> /etc/sioyek (absolute)"
-    # Regression: the binary reads the ABSOLUTE /etc/sioyek. With prefix=/usr the
-    # relative ${CMAKE_INSTALL_SYSCONFDIR} would wrongly expand to /usr/etc/sioyek.
-    if grep -qF "/usr/etc/sioyek" "${INST}"; then
-        bad "standard: config must NOT install under /usr/etc (binary reads /etc/sioyek)"
+    # Regression: main.cpp now reads the default config from
+    # /usr/share/sioyek (read_only_data_path), alongside shaders/tutorial.
+    # Installing it under sysconfdir would leave the binary looking at files
+    # that nothing installs. Check the install() block that actually carries
+    # each file, not just the presence of a share/sioyek destination.
+    for cfg in keys.config prefs.config; do
+        if grep -B3 -F "pdf_viewer/${cfg}" "${INST}" | grep -qF "/share/sioyek"; then
+            ok "standard: ${cfg} -> share/sioyek (datadir)"
+        else
+            bad "standard: ${cfg} is not installed into share/sioyek"
+        fi
+    done
+    if grep -qF "/etc/sioyek" "${INST}"; then
+        bad "standard: config must NOT install under /etc/sioyek (runtime reads /usr/share/sioyek)"
     else
-        ok "standard: config does not land under /usr/etc"
+        ok "standard: config does not land under /etc/sioyek"
     fi
     expect_path "${INST}" "/share/applications"                 "standard: desktop -> share/applications"
     expect_path "${INST}" "/share/pixmaps"                      "standard: icon -> share/pixmaps"
@@ -109,9 +118,10 @@ fi
 # ---------------------------------------------------------------------------
 # Runtime-path consistency guard (prefix != /usr).
 #
-# The runtime hard-codes /etc/sioyek and /usr/share/sioyek; an install with a
-# different prefix would silently not match. SioyekInstall must warn by default
-# and error under SIOYEK_STRICT_INSTALL_PREFIX=ON.
+# The runtime hard-codes /usr/share/sioyek (config, shaders, tutorial); an
+# install whose datadir resolves elsewhere would silently not match.
+# SioyekInstall must warn by default and error under
+# SIOYEK_STRICT_INSTALL_PREFIX=ON.
 # ---------------------------------------------------------------------------
 echo "--- runtime-path consistency guard ---"
 

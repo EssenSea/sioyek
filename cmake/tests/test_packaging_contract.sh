@@ -100,17 +100,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Absolute install destinations must be redirected under CPack's staging root
-# so packaging never writes the host's /etc directly.
+# Packages must be staged under a root-anchored CPack tree so the packaged
+# layout never depends on the build host's prefix (and a future absolute
+# destination cannot write to the host).
 # ---------------------------------------------------------------------------
-echo "--- CPack absolute-destination handling ---"
+echo "--- CPack package-root handling ---"
 if grep -qE 'CPACK_PACKAGING_INSTALL_PREFIX "/' "${CFG}" 2>/dev/null; then
-    ok "CPACK_PACKAGING_INSTALL_PREFIX set to / for absolute destinations"
+    ok "CPACK_PACKAGING_INSTALL_PREFIX set to / for a host-independent layout"
 else
-    bad "CPACK_PACKAGING_INSTALL_PREFIX not set (absolute /etc/sioyek would hit the host)"
+    bad "CPACK_PACKAGING_INSTALL_PREFIX not set (package layout would depend on the host prefix)"
 fi
 if grep -qE 'CPACK_SET_DESTDIR "?ON' "${CFG}" 2>/dev/null; then
-    ok "CPACK_SET_DESTDIR enabled for absolute destinations"
+    ok "CPACK_SET_DESTDIR enabled for root-anchored staging"
 else
     bad "CPACK_SET_DESTDIR not enabled"
 fi

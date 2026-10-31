@@ -7,10 +7,10 @@
   Design (must match the runtime path lookup logic in pdf_viewer/main.cpp):
     * standard layout (when LINUX_STANDARD_PATHS is defined):
         binary        -> <prefix>/bin/sioyek
-        shaders       -> <prefix>/share/sioyek/shaders
-        tutorial.pdf  -> <prefix>/share/sioyek/tutorial.pdf
-        keys.config   -> <sysconfdir>/sioyek/keys.config (absolute, i.e. /etc/sioyek)
-        prefs.config  -> <sysconfdir>/sioyek/prefs.config (absolute, i.e. /etc/sioyek)
+        shaders       -> <datadir>/sioyek/shaders   (runtime reads /usr/share/sioyek)
+        tutorial.pdf  -> <datadir>/sioyek/tutorial.pdf
+        keys.config   -> <datadir>/sioyek/keys.config
+        prefs.config  -> <datadir>/sioyek/prefs.config
         desktop/icon/man -> standard system locations
     * portable layout:
         resources live beside the binary (the parent dir lookup)
@@ -39,14 +39,12 @@ set_property(CACHE SIOYEK_INSTALL_LAYOUT PROPERTY STRINGS standard portable)
 # ---------------------------------------------------------------------------
 # Runtime-path consistency guard (non-Apple Unix, standard layout).
 #
-# The application runtime hard-codes the *absolute* lookup paths
-#   pdf_viewer/main.cpp:  /etc/sioyek        (default config)
-#                         /usr/share/sioyek (shaders, tutorial.pdf)
+# The application runtime hard-codes the *absolute* lookup path
+#   pdf_viewer/main.cpp:  /usr/share/sioyek (default config, shaders, tutorial.pdf)
 # when compiled with LINUX_STANDARD_PATHS (set for UNIX AND NOT APPLE in
 # CMakeLists.txt). The install() rules below instead derive destinations from
 # GNUInstallDirs, which follow CMAKE_INSTALL_PREFIX. The two agree only when
-#   CMAKE_INSTALL_FULL_SYSCONFDIR == /etc   and
-#   CMAKE_INSTALL_FULL_DATADIR   == /usr/share
+#   CMAKE_INSTALL_FULL_DATADIR == /usr/share
 # i.e. when the prefix is the conventional `/usr`. With any other prefix the
 # installed default config/shaders/tutorial would be invisible to the running
 # binary: a silently broken installation.
@@ -67,23 +65,18 @@ option(SIOYEK_STRICT_INSTALL_PREFIX
 if(UNIX AND NOT APPLE AND SIOYEK_INSTALL_LAYOUT STREQUAL "standard")
     # CMAKE_INSTALL_FULL_* are normally defined by GNUInstallDirs; compute a
     # fallback in case the include order ever changes.
-    if(NOT DEFINED CMAKE_INSTALL_FULL_SYSCONFDIR)
-        set(CMAKE_INSTALL_FULL_SYSCONFDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_SYSCONFDIR}")
-    endif()
     if(NOT DEFINED CMAKE_INSTALL_FULL_DATADIR)
         set(CMAKE_INSTALL_FULL_DATADIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}")
     endif()
 
-    if(NOT CMAKE_INSTALL_FULL_SYSCONFDIR STREQUAL "/etc"
-       OR NOT CMAKE_INSTALL_FULL_DATADIR STREQUAL "/usr/share")
+    if(NOT CMAKE_INSTALL_FULL_DATADIR STREQUAL "/usr/share")
         set(_sioyek_prefix_hint_lines
             "sioyek: the 'standard' install layout will not match the runtime's hard-coded lookup paths, so the installed default config/shaders/tutorial would be silently ineffective."
-            "  configured sysconfdir : ${CMAKE_INSTALL_FULL_SYSCONFDIR} (runtime reads /etc)"
             "  configured datadir    : ${CMAKE_INSTALL_FULL_DATADIR} (runtime reads /usr/share)"
             "Use one of:"
             "  * -DCMAKE_INSTALL_PREFIX=/usr (conventional layout, as the presets do), or"
             "  * -DSIOYEK_INSTALL_LAYOUT=portable (resources beside the binary), or"
-            "  * explicit -DCMAKE_INSTALL_SYSCONFDIR=etc -DCMAKE_INSTALL_DATADIR=share.")
+            "  * explicit -DCMAKE_INSTALL_DATADIR=share.")
         string(REPLACE ";" "\n" _sioyek_prefix_hint "${_sioyek_prefix_hint_lines}")
         if(SIOYEK_STRICT_INSTALL_PREFIX)
             message(FATAL_ERROR "${_sioyek_prefix_hint}")
@@ -93,7 +86,7 @@ if(UNIX AND NOT APPLE AND SIOYEK_INSTALL_LAYOUT STREQUAL "standard")
     else()
         message(STATUS
             "sioyek: standard install layout is consistent with the runtime paths "
-            "(sysconfdir=${CMAKE_INSTALL_FULL_SYSCONFDIR}, datadir=${CMAKE_INSTALL_FULL_DATADIR})")
+            "(datadir=${CMAKE_INSTALL_FULL_DATADIR})")
     endif()
 endif()
 
@@ -188,18 +181,19 @@ else()
         # Standard (FHS) layout: matches the runtime LINUX_STANDARD_PATHS.
         #
         # NOTE on the config destination: the application runtime (main.cpp)
-        # reads default config from the ABSOLUTE path `/etc/sioyek`. We must
-        # therefore install to GNUInstallDirs' *absolute* sysconfdir
-        # (`CMAKE_INSTALL_FULL_SYSCONFDIR`, which is `/etc` when the prefix is
-        # `/usr`), NOT the *relative* `${CMAKE_INSTALL_SYSCONFDIR}`.
+        # reads the default config from the ABSOLUTE path `/usr/share/sioyek`
+        # (read_only_data_path), alongside the shaders and tutorial. The
+        # defaults therefore belong under the SAME datadir as those resources,
+        # not under sysconfdir: installing them to `/etc/sioyek` would leave the
+        # binary looking at files that nothing installs.
         #
-        # Using the relative form would land the files in `<prefix>/etc/sioyek`
-        # (e.g. `/usr/etc/sioyek`), which the binary never looks at: the
-        # installed defaults would be silently ineffective for distros that use
-        # the conventional `-DCMAKE_INSTALL_PREFIX=/usr`. An absolute
-        # destination is still staged correctly under `DESTDIR`.
+        # The destination is prefix-relative because GNUInstallDirs' DATADIR
+        # follows CMAKE_INSTALL_PREFIX; the consistency guard above guarantees
+        # that it resolves to `/usr/share` (the path the binary hard-codes)
+        # whenever the standard layout is used. Being relative also keeps
+        # `DESTDIR` staging and CPack relocation correct.
         install(FILES pdf_viewer/keys.config pdf_viewer/prefs.config
-                DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/sioyek)
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/sioyek)
         install(DIRECTORY pdf_viewer/shaders/
                 DESTINATION ${CMAKE_INSTALL_DATADIR}/sioyek/shaders)
         install(FILES tutorial.pdf
@@ -221,8 +215,8 @@ endif()
 # records every file it wrote in install_manifest.txt, so a supported uninstall
 # is a replay of that manifest. Without this target a user who ran
 # `cmake --install` had no supported way back -- they had to hunt the files
-# down by hand, which for the 'standard' layout (which legitimately writes to
-# /etc/sioyek) is both tedious and error-prone.
+# down by hand, which for a tree that scatters resources across bin/, share/
+# and the desktop/man locations is both tedious and error-prone.
 #
 # Semantics, matching what a packager expects from `make uninstall`:
 #   * reads $DESTDIR-prefixed paths from install_manifest.txt, so an uninstall

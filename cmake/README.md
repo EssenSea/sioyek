@@ -466,7 +466,7 @@ The **authoritative install manifest**, matching the runtime path lookup in
 |-------------------|---------------------------|-----------------|
 | executable        | `bin/`                    | `bin/`          |
 | shaders, tutorial | `share/sioyek/`           | `bin/`          |
-| keys/prefs        | `/etc/sioyek/` (absolute) | `bin/`          |
+| keys/prefs        | `share/sioyek/`           | `bin/`          |
 | desktop/icon/man  | system locations          | (n/a)           |
 
 Option: `SIOYEK_INSTALL_LAYOUT` = `standard|portable`.
@@ -474,16 +474,21 @@ Option: `SIOYEK_INSTALL_LAYOUT` = `standard|portable`.
 Respects `DESTDIR` and `CMAKE_INSTALL_PREFIX`; downstream packagers can run
 `DESTDIR=<stage> cmake --install <builddir>` and get a complete tree.
 
-#### Why default configs go to `etc/sioyek` (and what that implies)
+#### Why default configs go to `share/sioyek` (and what that implies)
 
-The install location is chosen to **match the application's existing runtime
-path logic** in `pdf_viewer/main.cpp` (the `LINUX_STANDARD_PATHS` branch), which
-reads the default configuration from `/etc/sioyek` and read-only resources from
-`/usr/share/sioyek`. The install contract therefore places:
+The install location is chosen to **match the application's runtime path
+logic** in `pdf_viewer/main.cpp` (the `LINUX_STANDARD_PATHS` branch), which
+reads the default configuration from `read_only_data_path` =
+`/usr/share/sioyek`, alongside the shaders and `tutorial.pdf`. The install
+contract therefore places:
 
-* `keys.config`, `prefs.config` -> `CMAKE_INSTALL_FULL_SYSCONFDIR/sioyek`,
-  i.e. the **absolute** `/etc/sioyek` when the prefix is `/usr`;
-* shaders, tutorial -> `<datadir>/sioyek` (e.g. `/usr/share/sioyek`).
+* `keys.config`, `prefs.config` -> `<datadir>/sioyek`
+  (e.g. `/usr/share/sioyek`);
+* shaders, tutorial -> the same `<datadir>/sioyek`.
+
+Note that the default config is **not** installed under `sysconfdir`
+(`/etc`): the application never reads it from there, so doing so would ship
+defaults that are silently ineffective.
 
 Implications to be aware of:
 
@@ -493,8 +498,8 @@ Implications to be aware of:
   resource lookup will not match. Use a matching prefix (the presets set
   `/usr`).
 * **This mismatch is now checked at configure time.** `SioyekInstall.cmake`
-  compares `CMAKE_INSTALL_FULL_SYSCONFDIR`/`CMAKE_INSTALL_FULL_DATADIR` against
-  the runtime's hard-coded `/etc` and `/usr/share`:
+  compares `CMAKE_INSTALL_FULL_DATADIR` against the runtime's hard-coded
+  `/usr/share`:
   * under the `standard` layout with a different prefix it emits a **WARNING**
     naming the exact fix (so the documented preset-less `cmake -S . -B build`
     workflow keeps working);
@@ -502,12 +507,10 @@ Implications to be aware of:
     **FATAL_ERROR** (recommended for CI and packaging);
   * the `portable` layout is the sanctioned way to relocate the tree and never
     triggers the warning.
-* The config destination uses the **absolute** sysconfdir
-  (`CMAKE_INSTALL_FULL_SYSCONFDIR`), not the prefix-relative one. With the
-  conventional `-DCMAKE_INSTALL_PREFIX=/usr`, using the relative form would
-  install to `/usr/etc/sioyek` — which the binary (which reads the absolute
-  `/etc/sioyek`) never looks at, silently disabling the default config. Absolute
-  destinations remain fully staged under `DESTDIR`.
+* The config destination is prefix-relative (`CMAKE_INSTALL_DATADIR`), because
+  the runtime path is itself the conventional `/usr/share` that GNUInstallDirs
+  produces for `-DCMAKE_INSTALL_PREFIX=/usr`. Relative destinations remain
+  fully staged under `DESTDIR` and relocatable by CPack.
 * User-specific configuration is separate: it lives under
   `$XDG_CONFIG_HOME/sioyek` (usually `~/.config/sioyek`) and is created by Qt at
   runtime, so it never needs to be installed.
@@ -881,7 +884,7 @@ They apply to human and automated contributors alike.
 | `test_clean_contract.sh`      | Authored/tracked files are never deleted by a clean target (`_sioyek_protected_files`, configure-time assertion) |
 | `test_clean_contract.sh`      | `clean-deps` removes only submodule build residue, never sources                                                 |
 | `test_mupdf_contract.sh`      | Vendored mupdf build runs the generated script (dir pre-create + cleared make env)                               |
-| `test_install_contract.sh`    | Install uses the **absolute** sysconfdir (`CMAKE_INSTALL_FULL_SYSCONFDIR`), matching the runtime `/etc/sioyek`   |
+| `test_install_contract.sh`    | Default config installs under `DATADIR` (`share/sioyek`), matching the runtime `/usr/share/sioyek` and never `/etc` |
 | `test_buildtypes_contract.sh` | ccache is used only when its cache is writable; `AUTO` falls back, `ON` fails fast                               |
 | `test_presets.sh`             | Every preset referenced by CI exists and resolves                                                                |
 
@@ -895,13 +898,13 @@ matching `cmake/tests/test_*_contract.sh`** so the behavior is regression-tested
 * **Prefer system dependencies for packaging** (`SIOYEK_USE_SYSTEM_MUPDF=ON`,
   `SIOYEK_USE_SYSTEM_SQLITE=ON`) so packages link `libmupdf.so`/`libsqlite3.so`
   instead of bundling.
-* **Absolute sysconfdir.** The install contract must place default config at
-  `CMAKE_INSTALL_FULL_SYSCONFDIR/sioyek` (i.e. `/etc/sioyek` with
-  `-DCMAKE_INSTALL_PREFIX=/usr`), matching the runtime lookup in
-  `pdf_viewer/main.cpp`. The prefix-relative `CMAKE_INSTALL_SYSCONFDIR` would
-  produce `/usr/etc/sioyek`, which the binary never reads, silently disabling
-  the shipped defaults. An absolute destination is still staged correctly under
-  `DESTDIR`.
+* **Config lives with the read-only data.** The install contract must place
+  default config at `<datadir>/sioyek` (i.e. `/usr/share/sioyek` with
+  `-DCMAKE_INSTALL_PREFIX=/usr`), because `pdf_viewer/main.cpp` reads
+  `prefs.config`/`keys.config` from the same `read_only_data_path` as the
+  shaders and tutorial. Installing them under `sysconfdir` (`/etc/sioyek`)
+  would silently disable the shipped defaults. The root-anchored CPack staging
+  keeps relative destinations correct under `DESTDIR`/packaging.
 * Keep the install contract (`cmake/SioyekInstall.cmake`) in sync with the
   runtime path logic; do not hardcode paths in the modules.
 

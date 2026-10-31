@@ -195,9 +195,9 @@ unix:!mac:!android {
     tutorial.files = tutorial.pdf
     tutorial.path = $$PREFIX/share/sioyek/
     keys.files = pdf_viewer/keys.config
-    keys.path = $$PREFIX/etc/sioyek
+    keys.path = $$PREFIX/share/sioyek
     prefs.files = pdf_viewer/prefs.config
-    prefs.path = $$PREFIX/etc/sioyek
+    prefs.path = $$PREFIX/share/sioyek
     INSTALLS += target
     INSTALLS += shortcutfiles
     INSTALLS += icon

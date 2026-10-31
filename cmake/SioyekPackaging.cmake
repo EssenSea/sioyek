@@ -112,14 +112,15 @@ set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)
 set(CPACK_MONOLITHIC_INSTALL ON)
 
 # ---------------------------------------------------------------------------
-# Absolute install destinations and CPack.
+# Package root and CPack staging.
 #
-# The install contract places keys.config/prefs.config at the *absolute*
-# CMAKE_INSTALL_FULL_SYSCONFDIR (/etc/sioyek) so the runtime finds them. CPack
-# would otherwise try to write that path on the build host directly and fail
-# (or, worse, populate the real /etc). Prefixing the package root with "/" and
-# enabling CPACK_SET_DESTDIR makes CPack stage everything under its own
-# temporary tree and record the absolute paths inside the package instead.
+# The install contract now uses prefix-relative destinations only (default
+# config lives beside the other runtime resources under
+# <datadir>/sioyek, matching the /usr/share/sioyek path hard-coded in
+# main.cpp). Anchoring the package root at "/" and enabling CPACK_SET_DESTDIR
+# still keeps every package staged under CPack's own temporary tree, so the
+# packaged layout is identical regardless of the host's install prefix and a
+# future absolute destination can never write to the build host.
 # ---------------------------------------------------------------------------
 if(UNIX AND NOT APPLE)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/")

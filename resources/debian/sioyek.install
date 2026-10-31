@@ -1,5 +1,5 @@
-pdf_viewer/prefs.config etc/sioyek/
-pdf_viewer/keys.config etc/sioyek/
+pdf_viewer/prefs.config usr/share/sioyek/
+pdf_viewer/keys.config usr/share/sioyek/
 tutorial.pdf usr/share/sioyek/
 pdf_viewer/shaders/simple.vertex usr/share/sioyek/shaders/
 pdf_viewer/shaders/custom_colors.fragment usr/share/sioyek/shaders/

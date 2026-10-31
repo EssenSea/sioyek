@@ -154,8 +154,8 @@ def main():
     runtime = [
         ("shaders", "shaders", "read_only_data_path.slash(L\"shaders\")"),
         ("tutorial.pdf", "tutorial.pdf", "read_only_data_path.slash(L\"tutorial.pdf\")"),
-        ("prefs.config", "prefs\\.config", "standard_config_path.slash(L\"prefs.config\")"),
-        ("keys.config", "keys\\.config", "standard_config_path.slash(L\"keys.config\")"),
+        ("prefs.config", "prefs\\.config", "read_only_data_path.slash(L\"prefs.config\")"),
+        ("keys.config", "keys\\.config", "read_only_data_path.slash(L\"keys.config\")"),
     ]
     for label, pattern, origin in runtime:
         f.add(re.search(pattern, joined) is not None,
